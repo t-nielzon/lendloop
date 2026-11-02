@@ -14,7 +14,7 @@ const convex = new ConvexReactClient(process.env.NEXT_PUBLIC_CONVEX_URL as strin
 export function Providers({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-      <ClerkProvider>
+      <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
         <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
           <StoreUser />
           <SiteHeader />

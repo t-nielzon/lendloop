@@ -1,12 +1,20 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkMiddleware } from "@clerk/nextjs/server";
 
-const isPublicRoute = createRouteMatcher(["/", "/sign-in(.*)", "/sign-up(.*)"]);
+// plain path checks avoid the deprecated route matcher; convex still enforces real access
+const PUBLIC_PREFIXES = ["/sign-in", "/sign-up"];
+function isPublicRoute(pathname: string): boolean {
+  return pathname === "/" || PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
 
-export default clerkMiddleware(async (auth, req) => {
-  if (!isPublicRoute(req)) {
-    await auth.protect();
-  }
-});
+export default clerkMiddleware(
+  async (auth, req) => {
+  if (!isPublicRoute(req.nextUrl.pathname)) {
+      await auth.protect();
+    }
+  },
+  // without explicit urls clerk falls back to the hosted account portal
+  { signInUrl: "/sign-in", signUpUrl: "/sign-up" },
+);
 
 export const config = {
   matcher: [
