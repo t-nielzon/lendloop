@@ -100,13 +100,16 @@ Open http://localhost:3000. If `next dev` crashes with "OS file watch limit reac
 
 ### 5. Seed data
 
-Load five demo tools owned by a placeholder member:
+Load a lived-in demo neighbourhood: ten neighbours, 28 tools across every category (two archived) and 35 loans in every state, with dates relative to today and a full event timeline for each:
 
 ```bash
-npx convex run seed:demoTools
+npx convex run seed:demo       # inserts only if the seed neighbours do not exist yet
+npx convex run seed:resetDemo  # deletes seed-owned data and reseeds with fresh dates
 ```
 
-The demo tools belong to a seed user who cannot sign in, so nobody can approve requests for them as the owner. Evaluators can sign in as an admin (see below) and approve or decline those requests from the loan page or the admin Loans tab, or list their own tools with a second account and use the normal owner flow.
+The seed neighbours use `example.com` addresses and a `seed|` token prefix, so they cannot sign in and nobody can be emailed. Nobody can approve requests for their tools as the owner, so evaluators can sign in as an admin (see below) and approve or decline those requests from the loan page or the admin Loans tab, or list their own tools with a second account and use the normal owner flow. Seeding writes documents directly and never queues notification deliveries. `seed:resetDemo` touches only seed users, their tools, loans on those tools or by those users, and their events; it also removes the older `seed:demoTools` placeholder owner.
+
+The older `seed:demoTools` (five tools owned by a single placeholder member) still works.
 
 These are internal functions, so they can only be run through the CLI. To try the overdue reminder, approve a loan in the UI, then move its end date into the past (use the loan id from its page):
 
