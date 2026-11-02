@@ -1,5 +1,6 @@
 import type { Doc } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { firstName } from "./auth";
 import { todayUtc } from "./dates";
 
 // emails and tokens are deliberately left out of every client-facing loan shape
@@ -14,9 +15,9 @@ export async function toLoanView(ctx: QueryCtx, loan: Doc<"loans">, today: strin
     toolId: loan.toolId,
     toolName: tool?.name ?? "Removed tool",
     ownerId: loan.ownerId,
-    ownerName: owner?.name ?? "Member",
+    ownerName: firstName(owner?.name ?? ""),
     borrowerId: loan.borrowerId,
-    borrowerName: borrower?.name ?? "Member",
+    borrowerName: firstName(borrower?.name ?? ""),
     startDate: loan.startDate,
     endDate: loan.endDate,
     note: loan.note,

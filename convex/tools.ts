@@ -4,6 +4,7 @@ import { mutation, query } from "./_generated/server";
 import { firstName, requireUser } from "./lib/auth";
 import { todayUtc } from "./lib/dates";
 import { forbidden, invalid } from "./lib/errors";
+import { recordTransition } from "./lib/loanFlow";
 import { approvedLoans, computeAvailability, findTools } from "./lib/toolView";
 import { toolCategory, toolCondition } from "./schema";
 
@@ -191,7 +192,19 @@ export const archive = mutation({
   handler: async (ctx, args) => {
     const tool = await loadManageable(ctx, args.toolId);
     if (tool.status === "archived") return null;
-    await ctx.db.patch(args.toolId, { status: "archived", updatedAt: Date.now() });
+    const now = Date.now();
+    await ctx.db.patch(args.toolId, { status: "archived", updatedAt: now });
+    // pending requests on an archived tool could never be approved, so the borrowers are told now
+    const pending = await ctx.db
+      .query("loans")
+      .withIndex("by_tool_status", (q) => q.eq("toolId", args.toolId).eq("status", "requested"))
+      .collect();
+    const archiver = await requireUser(ctx);
+    for (const loan of pending) {
+      const patch = { status: "declined" as const, updatedAt: now, decidedAt: now };
+      await ctx.db.patch(loan._id, patch);
+      await recordTransition(ctx, { ...loan, ...patch }, loan.status, archiver, "tool archived");
+    }
     return null;
   },
 });

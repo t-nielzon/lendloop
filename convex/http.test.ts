@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { signatureHeader } from "./lib/signing";
 import { daysFromNow, IN_SECRET, setupWorld } from "./test.helpers";
 
@@ -80,6 +80,7 @@ describe("/n8n/overdue-loans", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       asOf: w.asOf,
+      hasMore: false,
       loans: [
         {
           loanId: w.loanId,
@@ -98,6 +99,50 @@ describe("/n8n/overdue-loans", () => {
     await post(w, "/n8n/reminder-sent", { idempotencyKey: `overdue-reminder:${w.loanId}:${w.asOf}`, loanId: w.loanId, asOf: w.asOf });
     const res = await post(w, "/n8n/overdue-loans", { asOf: w.asOf });
     expect((await res.json()).loans).toEqual([]);
+  });
+});
+
+describe("overdue paging", () => {
+  it("skips already-reminded loans before applying the limit and reports hasMore", async () => {
+    const w = await approvedOverdueLoan();
+    const ids = await w.t.run(async (ctx) => {
+      const base = (await ctx.db.get(w.loanId))!;
+      const { _id, _creationTime, ...rest } = base;
+      void _id;
+      void _creationTime;
+      const out = [];
+      // earlier end dates sort first, so these reminded loans would fill a naive limit
+      for (let i = 0; i < 3; i++) out.push(await ctx.db.insert("loans", { ...rest, endDate: daysFromNow(-30 - i), lastReminderOn: w.asOf }));
+      for (let i = 0; i < 2; i++) out.push(await ctx.db.insert("loans", { ...rest, endDate: daysFromNow(-10 - i) }));
+      return out;
+    });
+    expect(ids).toHaveLength(5);
+    const page = await w.t.query(internal.automation.overdueLoans, { asOf: w.asOf, limit: 2 });
+    expect(page.loans).toHaveLength(2);
+    expect(page.hasMore).toBe(true);
+    const all = await w.t.query(internal.automation.overdueLoans, { asOf: w.asOf, limit: 10 });
+    expect(all.loans).toHaveLength(3);
+    expect(all.hasMore).toBe(false);
+  });
+});
+
+describe("body size", () => {
+  it("rejects a chunked body over the cap even without a content-length", async () => {
+    const w = await setupWorld();
+    const chunk = new TextEncoder().encode("x".repeat(40_000));
+    const stream = new ReadableStream({
+      start(c) {
+        c.enqueue(chunk);
+        c.enqueue(chunk);
+        c.close();
+      },
+    });
+    const res = await w.t.fetch("/n8n/overdue-loans", {
+      method: "POST",
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    expect(res.status).toBe(413);
   });
 });
 

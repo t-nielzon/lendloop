@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx } from "./_generated/server";
-import { requireAdmin, requireUser } from "./lib/auth";
+import { firstName, requireAdmin, requireUser } from "./lib/auth";
 import { assertDate, diffDays, rangesOverlap, todayUtc } from "./lib/dates";
 import { forbidden, invalid } from "./lib/errors";
 import { recordTransition } from "./lib/loanFlow";
@@ -99,6 +99,11 @@ async function applyTransition(ctx: MutationCtx, loanId: Id<"loans">, t: Transit
   if (loan.status !== t.from) throw invalid(`a ${loan.status} loan cannot become ${t.to}`);
 
   // dates may have been taken by another approval since the request was made
+  if (t.to === "approved") {
+    const tool = await ctx.db.get(loan.toolId);
+    if (!tool || tool.status !== "active") throw invalid("this tool is archived and cannot be lent");
+    if (loan.startDate < todayUtc()) throw invalid("the start date has already passed");
+  }
   if (t.to === "approved" && (await overlapsApproved(ctx, loan.toolId, loan, loan._id))) {
     throw invalid("those dates now overlap an approved loan");
   }
@@ -181,7 +186,7 @@ export const get = query({
         at: e.at,
         type: e.type,
         actorType: e.actorType,
-        actorName: actor?.name,
+        actorName: actor ? firstName(actor.name) : undefined,
         detail: e.detail,
       });
     }

@@ -3,18 +3,26 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { firstName } from "./lib/auth";
 import { diffDays } from "./lib/dates";
 
+export const OVERDUE_PAGE_SIZE = 200;
+
+// filters while iterating the index so already-reminded loans cannot starve later ones; hasMore tells the caller to ask again
 export const overdueLoans = internalQuery({
-  args: { asOf: v.string() },
+  args: { asOf: v.string(), limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const loans = await ctx.db
+    const limit = args.limit ?? OVERDUE_PAGE_SIZE;
+    const query = ctx.db
       .query("loans")
-      .withIndex("by_status_endDate", (q) => q.eq("status", "approved").lt("endDate", args.asOf))
-      .take(500);
+      .withIndex("by_status_endDate", (q) => q.eq("status", "approved").lt("endDate", args.asOf));
     const out = [];
-    for (const loan of loans) {
+    let hasMore = false;
+    for await (const loan of query) {
       if (loan.lastReminderOn === args.asOf) continue;
       const [tool, borrower] = await Promise.all([ctx.db.get(loan.toolId), ctx.db.get(loan.borrowerId)]);
       if (!borrower) continue;
+      if (out.length >= limit) {
+        hasMore = true;
+        break;
+      }
       out.push({
         loanId: loan._id,
         toolName: tool?.name ?? "a tool",
@@ -24,7 +32,7 @@ export const overdueLoans = internalQuery({
         daysOverdue: diffDays(loan.endDate, args.asOf),
       });
     }
-    return out;
+    return { loans: out, hasMore };
   },
 });
 

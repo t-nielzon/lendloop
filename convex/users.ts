@@ -6,6 +6,7 @@ import { role } from "./schema";
 
 // admin allowlist lives in deployment env so roles are never client-supplied
 function isAdminEmail(email: string): boolean {
+  // unset means nobody is auto-admin, so a fresh deployment never grants roles by default
   const list = (process.env.ADMIN_EMAILS ?? "")
     .split(",")
     .map((e) => e.trim().toLowerCase())
@@ -43,7 +44,7 @@ export const store = mutation({
       tokenIdentifier: identity.tokenIdentifier,
       name,
       email,
-      role: isAdminEmail(email) ? "admin" : "user",
+      role: identity.emailVerified === true && isAdminEmail(email) ? "admin" : "user",
       createdAt: Date.now(),
     });
   },

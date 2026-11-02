@@ -33,7 +33,7 @@ export const retryDelivery = mutation({
     await requireAdmin(ctx);
     const row = await ctx.db.get(args.outboxId);
     if (!row) throw invalid("delivery not found");
-    if (row.status !== "dead") throw invalid("only dead deliveries can be retried");
+    if (row.status === "delivered") throw invalid("delivered notifications cannot be retried");
     await ctx.db.patch(row._id, { status: "pending", attempts: 0, nextAttemptAt: Date.now(), lastError: undefined });
     await ctx.scheduler.runAfter(0, internal.notifications.deliver, { outboxId: row._id });
     return null;

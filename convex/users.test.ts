@@ -49,3 +49,30 @@ describe("users", () => {
     });
   });
 });
+
+describe("admin allowlist", () => {
+  const sign = (t: ReturnType<typeof convexTest>, verified: boolean | undefined) =>
+    t.withIdentity({ subject: "x", issuer: "https://test.example", name: "Root Tester", email: "root@example.com", emailVerified: verified });
+  const roleOf = async (t: ReturnType<typeof convexTest>) => (await t.run((ctx) => ctx.db.query("users").collect()))[0].role;
+
+  it("grants admin only for a verified allowlisted email", async () => {
+    vi.stubEnv("ADMIN_EMAILS", "root@example.com");
+    const t = convexTest(schema, modules);
+    await sign(t, true).mutation(api.users.store, {});
+    expect(await roleOf(t)).toBe("admin");
+  });
+
+  it("does not grant admin for an unverified email", async () => {
+    vi.stubEnv("ADMIN_EMAILS", "root@example.com");
+    const t = convexTest(schema, modules);
+    await sign(t, false).mutation(api.users.store, {});
+    expect(await roleOf(t)).toBe("user");
+  });
+
+  it("grants nobody admin when the allowlist is unset", async () => {
+    vi.stubEnv("ADMIN_EMAILS", "");
+    const t = convexTest(schema, modules);
+    await sign(t, true).mutation(api.users.store, {});
+    expect(await roleOf(t)).toBe("user");
+  });
+});

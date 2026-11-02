@@ -11,14 +11,37 @@ const json = (status: number, body: unknown) =>
 
 type Parsed = Record<string, unknown>;
 
+// content-length can be absent or wrong (chunked uploads), so the stream is counted and cut off at the cap
+async function readCapped(request: Request, max: number): Promise<string | null> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    all.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder().decode(all);
+}
+
 // signature and freshness are checked on the raw text before any parsing so unsigned input never reaches the json parser
 async function authenticate(request: Request): Promise<{ ok: true; body: Parsed } | { ok: false; response: Response }> {
   const declared = Number(request.headers.get("content-length") ?? 0);
   if (declared > MAX_BODY_BYTES) return { ok: false, response: json(413, { error: "payload too large" }) };
-  const raw = await request.text();
-  if (new TextEncoder().encode(raw).length > MAX_BODY_BYTES) {
-    return { ok: false, response: json(413, { error: "payload too large" }) };
-  }
+  const raw = await readCapped(request, MAX_BODY_BYTES);
+  if (raw === null) return { ok: false, response: json(413, { error: "payload too large" }) };
   const secret = process.env.LENDLOOP_INBOUND_SECRET ?? "";
   const valid = await verify(
     secret,
@@ -55,8 +78,9 @@ http.route({
   method: "POST",
   handler: route(async (ctx, body) => {
     if (typeof body.asOf !== "string" || !isValidDate(body.asOf)) return bad();
-    const loans = await ctx.runQuery(internal.automation.overdueLoans, { asOf: body.asOf });
-    return json(200, { asOf: body.asOf, loans });
+    // one page of at most 200 loans; hasMore is true when more are still due and the caller may post again
+    const { loans, hasMore } = await ctx.runQuery(internal.automation.overdueLoans, { asOf: body.asOf });
+    return json(200, { asOf: body.asOf, loans, hasMore });
   }),
 });
 

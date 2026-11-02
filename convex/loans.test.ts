@@ -144,12 +144,13 @@ describe("loan reads", () => {
 });
 
 describe("admin", () => {
-  it("lists dead and pending deliveries and retries only dead ones", async () => {
+  it("lists dead and pending deliveries and retries dead and pending ones", async () => {
     const { t, root, owner, borrower, toolId } = await setupWorld();
     await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
     await expect(owner.query(api.admin.outbox, {})).rejects.toMatchObject(forbidden);
     const rows = await root.query(api.admin.outbox, {});
     expect(rows).toHaveLength(1);
+    await t.run((ctx) => ctx.db.patch(rows[0].id, { status: "delivered" }));
     await expect(root.mutation(api.admin.retryDelivery, { outboxId: rows[0].id })).rejects.toMatchObject(invalid);
     await t.run((ctx) => ctx.db.patch(rows[0].id, { status: "dead", attempts: 6 }));
     await root.mutation(api.admin.retryDelivery, { outboxId: rows[0].id });
@@ -158,5 +159,49 @@ describe("admin", () => {
     expect(after?.attempts).toBe(0);
     await expect(owner.query(api.admin.automationErrors, {})).rejects.toMatchObject(forbidden);
     expect(await root.query(api.admin.automationErrors, {})).toEqual([]);
+  });
+});
+
+describe("approval guards", () => {
+  it("rejects approving a second request that overlaps an approved one", async () => {
+    const { owner, borrower, other, toolId } = await setupWorld();
+    const a = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(4) });
+    const b = await other.mutation(api.loans.request, { toolId, startDate: daysFromNow(3), endDate: daysFromNow(6) });
+    await owner.mutation(api.loans.approve, { loanId: a });
+    await expect(owner.mutation(api.loans.approve, { loanId: b })).rejects.toMatchObject(invalid);
+  });
+
+  it("rejects approval for a start date in the past", async () => {
+    const { t, owner, borrower, toolId } = await setupWorld();
+    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(0), endDate: daysFromNow(2) });
+    await t.run((ctx) => ctx.db.patch(loanId, { startDate: daysFromNow(-1) }));
+    await expect(owner.mutation(api.loans.approve, { loanId })).rejects.toMatchObject(invalid);
+  });
+
+  it("archiving a tool declines its pending requests with events and notifications", async () => {
+    const { t, owner, borrower, toolId } = await setupWorld();
+    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+    await owner.mutation(api.tools.archive, { toolId });
+    const loan = await t.run((ctx) => ctx.db.get(loanId));
+    expect(loan?.status).toBe("declined");
+    const events = await t.run((ctx) => ctx.db.query("loanEvents").collect());
+    expect(events).toContainEqual(expect.objectContaining({ type: "declined", detail: "tool archived" }));
+    expect((await t.run((ctx) => ctx.db.query("outbox").collect())).length).toBe(2);
+  });
+
+  it("rejects approving a request on an archived tool", async () => {
+    const { t, owner, borrower, toolId } = await setupWorld();
+    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+    await t.run((ctx) => ctx.db.patch(toolId, { status: "archived" }));
+    await expect(owner.mutation(api.loans.approve, { loanId })).rejects.toMatchObject(invalid);
+  });
+
+  it("shows first names only in the loan view and timeline", async () => {
+    const { owner, borrower, toolId } = await setupWorld();
+    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+    const loan = await owner.query(api.loans.get, { loanId });
+    expect(loan?.borrowerName).toBe("Ben");
+    expect(loan?.ownerName).toBe("Olive");
+    expect(loan?.events[0].actorName).toBe("Ben");
   });
 });

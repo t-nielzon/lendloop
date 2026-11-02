@@ -121,6 +121,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_status", ["status"])
+    .index("by_status_nextAttemptAt", ["status", "nextAttemptAt"])
     .index("by_loan", ["loanId"]),
 
   webhookReceipts: defineTable({

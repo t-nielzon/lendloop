@@ -8,7 +8,7 @@ export const IN_SECRET = "inbound-secret-for-tests";
 export const OUT_SECRET = "outbound-secret-for-tests";
 
 export function identityFor(key: string) {
-  return { subject: key, issuer: "https://test.example", name: `${key[0].toUpperCase()}${key.slice(1)} Tester`, email: `${key}@example.com` };
+  return { subject: key, issuer: "https://test.example", name: `${key[0].toUpperCase()}${key.slice(1)} Tester`, email: `${key}@example.com`, emailVerified: true };
 }
 
 export async function setupWorld() {

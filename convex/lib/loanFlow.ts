@@ -21,6 +21,7 @@ export async function recordTransition(
   loan: Doc<"loans">,
   previousStatus: LoanStatus | null,
   actor: Doc<"users">,
+  detail?: string,
 ) {
   const now = Date.now();
   await ctx.db.insert("loanEvents", {
@@ -29,11 +30,23 @@ export async function recordTransition(
     actorType: "user",
     actorId: actor._id,
     type: loan.status,
+    detail,
   });
 
   const tool = await ctx.db.get(loan.toolId);
   const toOwner = loan.status === "requested" || loan.status === "cancelled";
   const recipient = await ctx.db.get(toOwner ? loan.ownerId : loan.borrowerId);
+  if (!recipient?.email) {
+    // a delivery without an address can never succeed, so it is recorded instead of queued
+    await ctx.db.insert("loanEvents", {
+      loanId: loan._id,
+      at: now,
+      actorType: "system",
+      type: "notification_failed",
+      detail: "recipient has no email address",
+    });
+    return;
+  }
   const eventId = crypto.randomUUID();
   const appUrl = (process.env.APP_URL ?? "").replace(/\/+$/, "");
   const payload: LoanStatusPayload = {
@@ -48,7 +61,7 @@ export async function recordTransition(
       endDate: loan.endDate,
     },
     tool: { name: tool?.name ?? "a tool" },
-    recipient: { firstName: firstName(recipient?.name ?? ""), email: recipient?.email ?? "" },
+    recipient: { firstName: firstName(recipient?.name ?? ""), email: recipient.email },
     link: `${appUrl}/loans/${loan._id}`,
   };
   const outboxId = await ctx.db.insert("outbox", {

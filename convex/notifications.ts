@@ -5,18 +5,52 @@ import { signatureHeader } from "./lib/signing";
 
 export const BACKOFF_SECONDS = [30, 120, 600, 3600, 21600];
 export const MAX_ATTEMPTS = 6;
-const TIMEOUT_MS = 10_000;
+// above n8n's own email retry window so a slow send is not retried here while it is still running
+const TIMEOUT_MS = 30_000;
+const UNCONFIGURED_RETRY_MS = 10 * 60_000;
+// longer than the fetch timeout so a claimed row is not picked up by the sweep mid-flight
+const CLAIM_LEASE_MS = 60_000;
+const CLAIM_SLACK_MS = 1_000;
+const SWEEP_BATCH = 100;
 
 export const getOutbox = internalQuery({
   args: { outboxId: v.id("outbox") },
   handler: async (ctx, args) => await ctx.db.get(args.outboxId),
 });
 
-// a missing config leaves the row pending without burning an attempt, so an admin fixing env loses nothing
+// a lease on nextAttemptAt keeps concurrent deliver runs and the sweep from sending the same row twice
+export const claim = internalMutation({
+  args: { outboxId: v.id("outbox") },
+  handler: async (ctx, args): Promise<boolean> => {
+    const row = await ctx.db.get(args.outboxId);
+    const now = Date.now();
+    if (!row || row.status !== "pending" || row.nextAttemptAt > now + CLAIM_SLACK_MS) return false;
+    await ctx.db.patch(row._id, { nextAttemptAt: now + CLAIM_LEASE_MS });
+    return true;
+  },
+});
+
+// a missing config defers the row without burning an attempt; the sweep retries it once an admin fixes env
 export const markUnconfigured = internalMutation({
   args: { outboxId: v.id("outbox"), reason: v.string() },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.outboxId, { lastError: args.reason });
+    const row = await ctx.db.get(args.outboxId);
+    if (!row || row.status !== "pending") return;
+    await ctx.db.patch(row._id, { lastError: args.reason, nextAttemptAt: Date.now() + UNCONFIGURED_RETRY_MS });
+  },
+});
+
+export const sweepPending = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const due = await ctx.db
+      .query("outbox")
+      .withIndex("by_status_nextAttemptAt", (q) => q.eq("status", "pending").lte("nextAttemptAt", Date.now()))
+      .take(SWEEP_BATCH);
+    for (const row of due) {
+      await ctx.scheduler.runAfter(0, internal.notifications.deliver, { outboxId: row._id });
+    }
+    return due.length;
   },
 });
 
@@ -65,6 +99,7 @@ export const deliver = internalAction({
   handler: async (ctx, args): Promise<void> => {
     const row = await ctx.runQuery(internal.notifications.getOutbox, { outboxId: args.outboxId });
     if (!row || row.status !== "pending") return;
+    if (!(await ctx.runMutation(internal.notifications.claim, { outboxId: row._id }))) return;
 
     const url = process.env.N8N_LOAN_STATUS_WEBHOOK_URL;
     if (!url) {

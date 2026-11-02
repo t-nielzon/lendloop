@@ -62,6 +62,7 @@ describe("deliver", () => {
     const expectedDelays = [30, 120, 600, 3600, 21600];
 
     for (let i = 0; i < 5; i++) {
+      await t.run((ctx) => ctx.db.patch(row._id, { nextAttemptAt: Date.now() }));
       const before = Date.now();
       await t.action(internal.notifications.deliver, { outboxId: row._id });
       const r = await t.run((ctx) => ctx.db.get(row._id));
@@ -69,6 +70,7 @@ describe("deliver", () => {
       expect(r!.nextAttemptAt - before).toBeGreaterThanOrEqual(expectedDelays[i] * 1000);
       expect(r!.nextAttemptAt - before).toBeLessThan(expectedDelays[i] * 1000 + 1000);
     }
+    await t.run((ctx) => ctx.db.patch(row._id, { nextAttemptAt: Date.now() }));
     await t.action(internal.notifications.deliver, { outboxId: row._id });
     const dead = await t.run((ctx) => ctx.db.get(row._id));
     expect(dead).toMatchObject({ status: "dead", attempts: 6 });
@@ -87,5 +89,63 @@ describe("deliver", () => {
     const { t, row } = await pendingOutbox();
     await t.action(internal.notifications.deliver, { outboxId: row._id });
     expect(await t.run((ctx) => ctx.db.get(row._id))).toMatchObject({ attempts: 1, lastError: "network error" });
+  });
+});
+
+describe("recovery and idempotence", () => {
+  it("defers an unconfigured row without counting an attempt and the sweep retries it", async () => {
+    const { t, row } = await pendingOutbox();
+    await t.action(internal.notifications.deliver, { outboxId: row._id });
+    const deferred = await t.run((ctx) => ctx.db.get(row._id));
+    expect(deferred).toMatchObject({ status: "pending", attempts: 0, lastError: "webhook url not configured" });
+    expect(deferred!.nextAttemptAt - Date.now()).toBeGreaterThan(9 * 60_000);
+
+    expect(await t.mutation(internal.notifications.sweepPending, {})).toBe(0);
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+    expect(await t.mutation(internal.notifications.sweepPending, {})).toBe(1);
+  });
+
+  it("sweep picks up a stuck pending row and ignores delivered ones", async () => {
+    const { t, row } = await pendingOutbox();
+    await t.run((ctx) => ctx.db.patch(row._id, { nextAttemptAt: Date.now() - 1000 }));
+    expect(await t.mutation(internal.notifications.sweepPending, {})).toBe(1);
+    await t.run((ctx) => ctx.db.patch(row._id, { status: "delivered" }));
+    expect(await t.mutation(internal.notifications.sweepPending, {})).toBe(0);
+  });
+
+  it("delivers a row once when deliver runs twice", async () => {
+    vi.stubEnv("N8N_LOAN_STATUS_WEBHOOK_URL", "http://n8n.test/hook");
+    vi.stubEnv("LENDLOOP_OUTBOUND_SECRET", OUT_SECRET);
+    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { t, row } = await pendingOutbox();
+    await Promise.all([
+      t.action(internal.notifications.deliver, { outboxId: row._id }),
+      t.action(internal.notifications.deliver, { outboxId: row._id }),
+    ]);
+    await t.action(internal.notifications.deliver, { outboxId: row._id });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await t.run((ctx) => ctx.db.get(row._id))).toMatchObject({ status: "delivered", attempts: 1 });
+  });
+
+  it("lets an admin retry a pending row", async () => {
+    const { t, root, row } = await pendingOutbox();
+    await t.run((ctx) => ctx.db.patch(row._id, { attempts: 2, nextAttemptAt: Date.now() + 99_000 }));
+    await root.mutation(api.admin.retryDelivery, { outboxId: row._id });
+    expect(await t.run((ctx) => ctx.db.get(row._id))).toMatchObject({ status: "pending", attempts: 0 });
+  });
+
+  it("records a failed notification instead of queueing when the recipient has no email", async () => {
+    const { t, borrower, as, owner, toolId } = await setupWorld();
+    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+    await t.run(async (ctx) => {
+      for (const u of await ctx.db.query("users").collect()) if (u.name.startsWith("Ben")) await ctx.db.patch(u._id, { email: "" });
+    });
+    const before = (await t.run((ctx) => ctx.db.query("outbox").collect())).length;
+    await owner.mutation(api.loans.approve, { loanId });
+    expect((await t.run((ctx) => ctx.db.query("outbox").collect())).length).toBe(before);
+    const events = await t.run((ctx) => ctx.db.query("loanEvents").collect());
+    expect(events).toContainEqual(expect.objectContaining({ type: "notification_failed", detail: "recipient has no email address" }));
+    void as;
   });
 });
