@@ -1,5 +1,8 @@
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { getViewer, requireAdmin } from "./lib/auth";
+import { forbidden, invalid } from "./lib/errors";
+import { role } from "./schema";
 
 // admin allowlist lives in deployment env so roles are never client-supplied
 function isAdminEmail(email: string): boolean {
@@ -12,14 +15,7 @@ function isAdminEmail(email: string): boolean {
 
 export const me = query({
   args: {},
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return null;
-    return await ctx.db
-      .query("users")
-      .withIndex("by_token", (q) => q.eq("tokenIdentifier", identity.tokenIdentifier))
-      .unique();
-  },
+  handler: async (ctx) => await getViewer(ctx),
 });
 
 export const store = mutation({
@@ -50,5 +46,27 @@ export const store = mutation({
       role: isAdminEmail(email) ? "admin" : "user",
       createdAt: Date.now(),
     });
+  },
+});
+
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const users = await ctx.db.query("users").take(500);
+    return users.map((u) => ({ id: u._id, name: u.name, email: u.email, role: u.role, createdAt: u.createdAt }));
+  },
+});
+
+export const setRole = mutation({
+  args: { userId: v.id("users"), role },
+  handler: async (ctx, args) => {
+    const admin = await requireAdmin(ctx);
+    // blocking self-change guarantees the last admin cannot lock everyone out
+    if (admin._id === args.userId) throw forbidden();
+    const target = await ctx.db.get(args.userId);
+    if (!target) throw invalid("user not found");
+    await ctx.db.patch(args.userId, { role: args.role });
+    return null;
   },
 });
