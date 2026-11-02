@@ -38,15 +38,15 @@ cat <<MSG
 
 stack is up: convex 3210/3211, dashboard http://localhost:6791, n8n http://localhost:5678, mailpit http://localhost:8025
 
-1) run convex dev against the local backend:
-   CONVEX_SELF_HOSTED_URL=http://127.0.0.1:3210 CONVEX_SELF_HOSTED_ADMIN_KEY='${admin_key}' npx convex dev
-
-2) set the convex-side variables (same env vars as above):
+1) set the convex-side variables first (export the same two CONVEX_SELF_HOSTED_* vars as in step 2):
    npx convex env set LENDLOOP_OUTBOUND_SECRET '${LENDLOOP_OUTBOUND_SECRET}'
    npx convex env set LENDLOOP_INBOUND_SECRET '${LENDLOOP_INBOUND_SECRET}'
    npx convex env set N8N_LOAN_STATUS_WEBHOOK_URL 'http://n8n:5678/webhook/lendloop/loan-status'
    npx convex env set APP_URL 'http://localhost:3000'
-   (also CLERK_JWT_ISSUER_DOMAIN and ADMIN_EMAILS, see .env.example)
+   (also CLERK_JWT_ISSUER_DOMAIN and ADMIN_EMAILS, see .env.example; convex dev needs the issuer to push)
+
+2) push the functions and keep convex dev running (the cli may need CHOKIDAR_USEPOLLING=1 on hosts with few file watches):
+   CONVEX_SELF_HOSTED_URL=http://127.0.0.1:3210 CONVEX_SELF_HOSTED_ADMIN_KEY='${admin_key}' npx convex dev
 
 3) smoke test the webhook with a signed request:
    node scripts/sign-request.mjs "\$LENDLOOP_OUTBOUND_SECRET" http://localhost:5678/webhook/lendloop/loan-status

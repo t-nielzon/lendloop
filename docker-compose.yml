@@ -7,8 +7,8 @@ services:
     stop_grace_period: 10s
     stop_signal: SIGINT
     ports:
-      - "3210:3210"
-      - "3211:3211"
+      - "127.0.0.1:3210:3210"
+      - "127.0.0.1:3211:3211"
     volumes:
       - convex-data:/convex/data
     environment:
@@ -28,7 +28,7 @@ services:
     stop_grace_period: 10s
     stop_signal: SIGINT
     ports:
-      - "6791:6791"
+      - "127.0.0.1:6791:6791"
     environment:
       NEXT_PUBLIC_DEPLOYMENT_URL: http://127.0.0.1:3210
     depends_on:
@@ -38,8 +38,8 @@ services:
   mailpit:
     image: axllent/mailpit:v1
     ports:
-      - "8025:8025"
-      - "1025:1025"
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
     healthcheck:
       test: ["CMD", "/mailpit", "readyz"]
       interval: 5s
@@ -74,7 +74,7 @@ services:
   n8n:
     image: *n8n-image
     ports:
-      - "5678:5678"
+      - "127.0.0.1:5678:5678"
     environment:
       <<: *n8n-env
       N8N_HOST: localhost

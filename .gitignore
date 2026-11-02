@@ -46,4 +46,5 @@ next-env.d.ts
 # local tooling state
 .convex/
 .clerk/
+AGENTS.md
 CLAUDE.md

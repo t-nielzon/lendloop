@@ -1,0 +1,7 @@
+.next
+convex/_generated
+pnpm-lock.yaml
+n8n
+docs
+README.md
+src/components/ui
