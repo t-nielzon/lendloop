@@ -4,8 +4,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-type WfNode = { name: string; type: string; parameters: Record<string, unknown> };
-type Workflow = { id: string; name: string; nodes: WfNode[]; settings: Record<string, unknown> };
+type WfNode = { name: string; type: string; parameters: Record<string, unknown>; retryOnFail?: boolean; maxTries?: number; waitBetweenTries?: number; onError?: string };
+type Conns = Record<string, { main: { node: string }[][] }>;
+type Workflow = { id: string; name: string; nodes: WfNode[]; connections: Conns; settings: Record<string, unknown> };
 
 const load = (file: string): Workflow =>
   JSON.parse(readFileSync(join(__dirname, "../workflows", file), "utf8"));
@@ -108,7 +109,7 @@ describe("signing nodes", () => {
     const loan = { loanId: "l9", asOf: "2026-11-03" };
     const { json } = await runCode(wf2, "Sign reminder-sent request", {
       $env: env,
-      $: () => ({ item: { json: loan } }),
+      $: () => ({ first: () => ({ json: loan }) }),
     });
     expect(JSON.parse(json.body)).toEqual({ idempotencyKey: "overdue-reminder:l9:2026-11-03", loanId: "l9", asOf: "2026-11-03" });
     expect(json.headers["X-LendLoop-Event-Id"]).toBe("overdue-reminder:l9:2026-11-03");
@@ -128,10 +129,14 @@ describe("workflow structure", () => {
     expect(wf1.settings.errorWorkflow).toBe(wf3.id);
     expect(wf2.settings.errorWorkflow).toBe(wf3.id);
   });
-  it("retries http and email nodes three times", () => {
+  it("retries http nodes three times and email nodes twice with a short wait", () => {
     for (const w of [wf1, wf2, wf3]) {
       for (const n of w.nodes.filter((n) => /httpRequest|emailSend/.test(n.type))) {
-        expect(n).toMatchObject({ retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 });
+        const email = n.type.includes("emailSend");
+        const loose = w === wf3 && email;
+        expect(n.retryOnFail).toBe(true);
+        expect(n.maxTries).toBe(email && !loose ? 2 : 3);
+        expect(n.waitBetweenTries).toBe(email && !loose ? 3000 : 5000);
       }
     }
   });
@@ -143,5 +148,68 @@ describe("workflow structure", () => {
     for (const f of ["loan-status-notification.json", "overdue-reminders.json", "error-handler.json"]) {
       expect(readFileSync(join(__dirname, "../workflows", f), "utf8")).not.toMatch(/secret-|password":\s*"[^"]/i);
     }
+  });
+});
+
+const next = (w: Workflow, from: string, output = 0) => (w.connections[from]?.main[output] ?? []).map((c) => c.node);
+const node = (w: Workflow, name: string) => w.nodes.find((n) => n.name === name)!;
+
+describe("verify recipient", () => {
+  it("rejects an empty or blank recipient email", async () => {
+    for (const email of ["", "   "]) {
+      const raw = JSON.stringify({ ...JSON.parse(body), recipient: { firstName: "Sam", email } });
+      const ts = now();
+      const item = {
+        json: { headers: { "x-lendloop-timestamp": ts, "x-lendloop-signature": backendSign(SECRET, ts, raw) } },
+        binary: { data: {} },
+      };
+      const [{ json }] = await runCode(wf1, "Verify signature", { $input: { first: () => item }, $env: { LENDLOOP_OUTBOUND_SECRET: SECRET } }, { getBinaryDataBuffer: async () => Buffer.from(raw) });
+      expect(json).toMatchObject({ valid: false, reason: "invalid payload", statusCode: 400 });
+    }
+  });
+});
+
+describe("reminder loop structure", () => {
+  it("sends one email per item and writes back right after each send", () => {
+    const loop = node(wf2, "Loop Over Items");
+    expect(loop.type).toBe("n8n-nodes-base.splitInBatches");
+    expect(loop.parameters.batchSize).toBe(1);
+    expect(next(wf2, "Split loans")).toEqual(["Loop Over Items"]);
+    expect(next(wf2, "Loop Over Items", 1)).toEqual(["Send reminder email"]);
+    expect(next(wf2, "Send reminder email", 0)).toEqual(["Sign reminder-sent request"]);
+    expect(next(wf2, "Sign reminder-sent request")).toEqual(["Record reminder in Convex"]);
+    expect(next(wf2, "Record reminder in Convex", 0)).toEqual(["Mark sent"]);
+    expect(next(wf2, "Mark sent")).toEqual(["Loop Over Items"]);
+  });
+  it("routes failures back into the loop instead of stopping it", () => {
+    expect(node(wf2, "Send reminder email").onError).toBe("continueErrorOutput");
+    expect(node(wf2, "Record reminder in Convex").onError).toBe("continueErrorOutput");
+    expect(next(wf2, "Send reminder email", 1)).toEqual(["Mark failed"]);
+    expect(next(wf2, "Mark failed")).toEqual(["Loop Over Items"]);
+  });
+  it("pages again while more loans remain and fails the run when any send failed", () => {
+    expect(next(wf2, "Loop Over Items", 0)).toEqual(["Summarize page"]);
+    expect(next(wf2, "More pages?", 0)).toEqual(["Sign overdue request"]);
+    expect(next(wf2, "More pages?", 1)).toEqual(["Fail if any failed"]);
+  });
+  it("summarizes failures into a thrown error", async () => {
+    const summary = { failedTotal: 1, hasMore: false, failures: [{ loanId: "l1", error: "smtp down" }] };
+    await expect(runCode(wf2, "Fail if any failed", { $input: { first: () => ({ json: summary }) } })).rejects.toThrow(/1 failed.*l1: smtp down/);
+    const ok = await runCode(wf2, "Fail if any failed", { $input: { first: () => ({ json: { failedTotal: 0, hasMore: false, failures: [] } }) } });
+    expect(ok).toHaveLength(1);
+  });
+});
+
+describe("error handler order", () => {
+  it("records in Convex before emailing and survives failures of either", () => {
+    expect(next(wf3, "Build alert")).toEqual(["Record error in Convex"]);
+    expect(next(wf3, "Record error in Convex")).toEqual(["Email alert"]);
+    expect(node(wf3, "Record error in Convex").onError).toBe("continueRegularOutput");
+    expect(node(wf3, "Email alert").onError).toBe("continueRegularOutput");
+  });
+  it("points the error workflow id at an existing workflow", () => {
+    expect(wf3.id).toBe("lendloopErrHandler1");
+    expect(wf1.settings.errorWorkflow).toBe("lendloopErrHandler1");
+    expect(wf2.settings.errorWorkflow).toBe("lendloopErrHandler1");
   });
 });

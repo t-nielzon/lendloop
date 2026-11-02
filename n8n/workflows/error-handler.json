@@ -5,7 +5,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "**Error handler.** Runs when the notification or reminder workflow fails. It emails the alert address and records the failure in Convex (signed, once per execution) so it shows up for admins.",
+        "content": "**Error handler.** Runs when the notification or reminder workflow fails. It first records the failure in Convex (signed, once per execution) so admins see it, then emails the alert address. Each step continues on error so an email outage never loses the record.",
         "width": 760,
         "height": 130
       },
@@ -47,9 +47,9 @@
       "parameters": {
         "fromEmail": "LendLoop <noreply@lendloop.local>",
         "toEmail": "={{ $env.LENDLOOP_ALERT_EMAIL }}",
-        "subject": "={{ $json.subject }}",
+        "subject": "={{ $('Build alert').first().json.subject }}",
         "emailFormat": "text",
-        "text": "={{ $json.text }}",
+        "text": "={{ $('Build alert').first().json.text }}",
         "options": {}
       },
       "id": "a3000003-0000-4000-8000-000000000004",
@@ -57,8 +57,8 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        440,
-        0
+        660,
+        100
       ],
       "credentials": {
         "smtp": {
@@ -68,7 +68,8 @@
       },
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -91,11 +92,12 @@
       "typeVersion": 4.2,
       "position": [
         440,
-        200
+        100
       ],
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -114,12 +116,18 @@
       "main": [
         [
           {
-            "node": "Email alert",
+            "node": "Record error in Convex",
             "type": "main",
             "index": 0
-          },
+          }
+        ]
+      ]
+    },
+    "Record error in Convex": {
+      "main": [
+        [
           {
-            "node": "Record error in Convex",
+            "node": "Email alert",
             "type": "main",
             "index": 0
           }

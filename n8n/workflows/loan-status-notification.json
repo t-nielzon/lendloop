@@ -5,9 +5,9 @@
   "nodes": [
     {
       "parameters": {
-        "content": "**Loan status notification.** Convex posts a signed JSON body here when a loan changes status. The signature and timestamp are checked first (401 on failure), a repeated event id is acknowledged without a second email, and the recipient gets one email. A failed send answers 500 so Convex retries later; the event id is only remembered after the email went out.",
+        "content": "**Loan status notification.** Convex posts a signed JSON body here when a loan changes status. The signature and timestamp are checked first (401 on a bad signature, 400 on an invalid payload or empty recipient), a repeated event id is acknowledged without a second email, and the recipient gets one email. A failed send answers 500 so Convex retries later; the event id is only remembered after the email went out.\n\n**Known limit.** Processed event ids live in workflow static data, which n8n saves only when an execution ends and the last writer wins. Two deliveries of the same event within a few seconds can therefore both send. The email retries are kept short (2 tries, 3 s apart) so the worst case stays well inside the backend's 30 s timeout and its own retry spacing; a duplicate email is accepted as the residual risk.",
         "width": 760,
-        "height": 150
+        "height": 260
       },
       "id": "a1000001-0000-4000-8000-000000000001",
       "name": "Note 1",
@@ -40,7 +40,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const crypto = require('crypto');\nconst MAX_SKEW_SECONDS = 300;\nconst reject = (reason) => [{ json: { valid: false, reason } }];\nconst secret = $env.LENDLOOP_OUTBOUND_SECRET;\nif (!secret) return reject('secret not configured');\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst timestamp = String(headers['x-lendloop-timestamp'] || '');\nconst signature = String(headers['x-lendloop-signature'] || '');\nif (!/^\\d{1,12}$/.test(timestamp)) return reject('bad timestamp');\nif (Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) > MAX_SKEW_SECONDS) return reject('stale timestamp');\nif (!item.binary || !item.binary.data) return reject('missing raw body');\nconst raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\nconst expected = Buffer.from('v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + raw).digest('hex'));\nconst received = Buffer.from(signature);\nif (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return reject('bad signature');\nlet payload;\ntry { payload = JSON.parse(raw); } catch (e) { return reject('invalid json'); }\nconst eventId = payload && payload.eventId;\nif (typeof eventId !== 'string' || !eventId || !payload.recipient || typeof payload.recipient.email !== 'string') {\n  return reject('invalid payload');\n}\nreturn [{ json: { valid: true, eventId, payload } }];"
+        "jsCode": "const crypto = require('crypto');\nconst MAX_SKEW_SECONDS = 300;\nconst reject = (reason, statusCode = 401) => [{ json: { valid: false, reason, statusCode } }];\nconst secret = $env.LENDLOOP_OUTBOUND_SECRET;\nif (!secret) return reject('secret not configured');\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst timestamp = String(headers['x-lendloop-timestamp'] || '');\nconst signature = String(headers['x-lendloop-signature'] || '');\nif (!/^\\d{1,12}$/.test(timestamp)) return reject('bad timestamp');\nif (Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) > MAX_SKEW_SECONDS) return reject('stale timestamp');\nif (!item.binary || !item.binary.data) return reject('missing raw body');\nconst raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\nconst expected = Buffer.from('v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + raw).digest('hex'));\nconst received = Buffer.from(signature);\nif (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return reject('bad signature');\nlet payload;\ntry { payload = JSON.parse(raw); } catch (e) { return reject('invalid json', 400); }\nconst eventId = payload && payload.eventId;\nif (typeof eventId !== 'string' || !eventId || !payload.recipient || typeof payload.recipient.email !== 'string' || !payload.recipient.email.trim()) {\n  return reject('invalid payload', 400);\n}\nreturn [{ json: { valid: true, eventId, payload } }];"
       },
       "id": "a1000001-0000-4000-8000-000000000003",
       "name": "Verify signature",
@@ -88,13 +88,13 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "{\"error\":\"unauthorized\"}",
+        "responseBody": "={{ JSON.stringify({ error: $json.statusCode === 400 ? 'invalid payload' : 'unauthorized' }) }}",
         "options": {
-          "responseCode": 401
+          "responseCode": "={{ $json.statusCode || 401 }}"
         }
       },
       "id": "a1000001-0000-4000-8000-000000000005",
-      "name": "Respond 401",
+      "name": "Respond rejected",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
@@ -205,8 +205,8 @@
         }
       },
       "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 5000,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
       "onError": "continueErrorOutput"
     },
     {
@@ -292,7 +292,7 @@
         ],
         [
           {
-            "node": "Respond 401",
+            "node": "Respond rejected",
             "type": "main",
             "index": 0
           }

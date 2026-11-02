@@ -3,7 +3,7 @@ name: lendloop
 
 services:
   convex-backend:
-    image: ghcr.io/get-convex/convex-backend:latest
+    image: ghcr.io/convex/convex-backend:bb31399c8704ceb6c19003936f6e144375b2c3bc
     stop_grace_period: 10s
     stop_signal: SIGINT
     ports:
@@ -24,7 +24,7 @@ services:
       retries: 20
 
   convex-dashboard:
-    image: ghcr.io/get-convex/convex-dashboard:latest
+    image: ghcr.io/convex/convex-dashboard:bb31399c8704ceb6c19003936f6e144375b2c3bc
     stop_grace_period: 10s
     stop_signal: SIGINT
     ports:
@@ -49,7 +49,8 @@ services:
   # it runs before n8n starts because the cli cannot change a running instance's active workflows.
   n8n-import:
     image: &n8n-image n8nio/n8n:2.46.4
-    user: root
+    # same uid as the main service so the shared volume is never left root-owned
+    user: node
     entrypoint: ["/bin/sh", "/import/import.sh"]
     environment: &n8n-env
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}

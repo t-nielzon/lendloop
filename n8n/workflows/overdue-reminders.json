@@ -5,9 +5,9 @@
   "nodes": [
     {
       "parameters": {
-        "content": "**Daily overdue reminders.** Every morning at 09:00 (instance timezone) ask Convex which approved loans are past their end date, email each borrower, then tell Convex the reminder went out. Convex ignores a repeated idempotency key, so a rerun never double counts.",
+        "content": "**Daily overdue reminders.** Every morning at 09:00 (instance timezone) ask Convex which approved loans are past their end date. Each borrower is handled on their own: email, then an immediate write-back so Convex knows the reminder went out. A failed address is recorded and skipped, never blocking the others. Convex returns at most 200 loans per call and excludes already-reminded ones, so when more remain the workflow fetches again (up to 10 pages). If anything failed, the run ends with one summarized error so the error workflow fires.",
         "width": 900,
-        "height": 140
+        "height": 180
       },
       "id": "a2000002-0000-4000-8000-000000000001",
       "name": "Note 1",
@@ -82,7 +82,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const res = $input.first().json;\nreturn (res.loans || []).map((loan) => ({ json: { ...loan, asOf: res.asOf } }));"
+        "jsCode": "const res = $input.first().json;\nconst asOf = res.asOf || $('Sign overdue request').last().json.asOf;\nreturn (res.loans || []).map((loan) => ({ json: { ...loan, asOf } }));"
       },
       "id": "a2000002-0000-4000-8000-000000000005",
       "name": "Split loans",
@@ -107,7 +107,7 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        880,
+        1100,
         100
       ],
       "credentials": {
@@ -117,20 +117,21 @@
         }
       },
       "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 5000
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const crypto = require('crypto');\nconst sign = (secret, timestamp, body) =>\n  'v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\nconst signedRequest = (path, bodyObject) => {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const base = String($env.LENDLOOP_CONVEX_SITE_URL || 'http://convex-backend:3211').replace(/\\/+$/, '');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const body = JSON.stringify(bodyObject);\n  return {\n    url: base + path,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-LendLoop-Timestamp': timestamp,\n      'X-LendLoop-Signature': sign(secret, timestamp, body),\n      'X-LendLoop-Event-Id': bodyObject.idempotencyKey || ''\n    }\n  };\n};\nconst loan = $('Split loans').item.json;\nconst idempotencyKey = 'overdue-reminder:' + loan.loanId + ':' + loan.asOf;\nreturn { json: signedRequest('/n8n/reminder-sent', { idempotencyKey, loanId: loan.loanId, asOf: loan.asOf }) };"
+        "jsCode": "const crypto = require('crypto');\nconst sign = (secret, timestamp, body) =>\n  'v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\nconst signedRequest = (path, bodyObject) => {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const base = String($env.LENDLOOP_CONVEX_SITE_URL || 'http://convex-backend:3211').replace(/\\/+$/, '');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const body = JSON.stringify(bodyObject);\n  return {\n    url: base + path,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-LendLoop-Timestamp': timestamp,\n      'X-LendLoop-Signature': sign(secret, timestamp, body),\n      'X-LendLoop-Event-Id': bodyObject.idempotencyKey || ''\n    }\n  };\n};\nconst loan = $('Loop Over Items').first().json;\nconst idempotencyKey = 'overdue-reminder:' + loan.loanId + ':' + loan.asOf;\nreturn { json: signedRequest('/n8n/reminder-sent', { idempotencyKey, loanId: loan.loanId, asOf: loan.asOf }) };"
       },
       "id": "a2000002-0000-4000-8000-000000000007",
       "name": "Sign reminder-sent request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1100,
+        1320,
         100
       ]
     },
@@ -154,12 +155,119 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1320,
+        1540,
         100
       ],
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": "={{ $prevNode.name === 'Split loans' }}"
+        }
+      },
+      "id": "a2000002-0000-4000-8000-000000000020",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const loan = $('Loop Over Items').first().json;\nreturn { json: { ok: true, loanId: loan.loanId } };"
+      },
+      "id": "a2000002-0000-4000-8000-000000000021",
+      "name": "Mark sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const loan = $('Loop Over Items').first().json;\nconst err = $json.error;\nconst error = String((typeof err === 'string' ? err : err && err.message) || 'send or write-back failed').slice(0, 200);\nreturn { json: { ok: false, loanId: loan.loanId, error } };"
+      },
+      "id": "a2000002-0000-4000-8000-000000000022",
+      "name": "Mark failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const MAX_PAGES = 10;\nconst results = $input.all().map((i) => i.json);\nconst failed = results.filter((r) => r.ok === false);\nconst store = $getWorkflowStaticData('node');\nif ($runIndex === 0 || !Array.isArray(store.failures)) store.failures = [];\nstore.failures.push(...failed.map((f) => ({ loanId: f.loanId, error: f.error })));\nconst hasMore = $('Fetch overdue loans').last().json.hasMore === true;\n// only page on while something was actually reminded, otherwise the same failing loans fill every page\nconst canContinue = hasMore && results.length > failed.length && $runIndex < MAX_PAGES - 1;\nreturn [{ json: { page: $runIndex + 1, hasMore, canContinue, failedTotal: store.failures.length, failures: store.failures.slice(0, 20) } }];"
+      },
+      "id": "a2000002-0000-4000-8000-000000000023",
+      "name": "Summarize page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a2000002-0000-4000-8000-000000000050",
+              "leftValue": "={{ $json.canContinue }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a2000002-0000-4000-8000-000000000024",
+      "name": "More pages?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s = $input.first().json;\nif (s.failedTotal > 0 || s.hasMore) {\n  const list = s.failures.map((f) => f.loanId + ': ' + f.error).join('; ');\n  throw new Error('overdue reminders incomplete: ' + s.failedTotal + ' failed' + (s.hasMore ? ', more overdue loans remain' : '') + (list ? ' (' + list + ')' : ''));\n}\nreturn [{ json: s }];"
+      },
+      "id": "a2000002-0000-4000-8000-000000000025",
+      "name": "Fail if any failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -40
+      ]
     }
   ],
   "connections": {
@@ -200,6 +308,24 @@
       "main": [
         [
           {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Summarize page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Send reminder email",
             "type": "main",
             "index": 0
@@ -215,6 +341,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -223,6 +356,75 @@
         [
           {
             "node": "Record reminder in Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record reminder in Convex": {
+      "main": [
+        [
+          {
+            "node": "Mark sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark sent": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark failed": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize page": {
+      "main": [
+        [
+          {
+            "node": "More pages?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "More pages?": {
+      "main": [
+        [
+          {
+            "node": "Sign overdue request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail if any failed",
             "type": "main",
             "index": 0
           }
