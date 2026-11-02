@@ -6,7 +6,7 @@ This document goes deeper than the README on the data model, the delivery pipeli
 
 | Component | Owns |
 |-|-|
-| Next.js | Pages, Clerk middleware (everything except `/`, `/sign-in`, `/sign-up` requires sign-in), UI state |
+| Next.js | Pages, Clerk proxy in `src/proxy.ts` (everything except `/`, `/sign-in`, `/sign-up` requires sign-in), UI state |
 | Clerk | Identity, sessions, the `convex` JWT |
 | Convex | All data, all authorization, loan rules, the outbox, the cron sweep, signed HTTP routes for n8n |
 | n8n | Rendering and sending email, the daily schedule, reporting its own failures. It holds no business state except a short list of processed event ids |
@@ -64,7 +64,7 @@ The lease (60 s) is deliberately longer than the HTTP timeout (30 s) so a row in
 
 Sweep: `crons.ts` runs `notifications.sweepPending` every 5 minutes. It takes up to 100 pending rows with `nextAttemptAt` in the past and schedules `deliver` for each. This recovers rows whose scheduled job was lost (deployment restart, crash between claim and result) and rows deferred for missing config.
 
-Admin retry: `admin.retryDelivery` resets a `pending` or `dead` row to `pending` with zero attempts and schedules a delivery. Delivered rows cannot be retried.
+Admin retry: `admin.retryDelivery` resets a `pending` or `dead` row to `pending` with zero attempts and schedules a delivery. Delivered rows cannot be retried, and a row whose delivery claim (`claimedUntil`) is still active is refused so a manual retry cannot double-send.
 
 Guarantee: at least once. n8n's event-id check makes a repeat harmless in the normal case.
 

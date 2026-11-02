@@ -15,17 +15,17 @@ Features:
 
 ## Screenshots
 
-| Catalog | Tool detail |
+| Catalog | Tool detail and request |
 |-|-|
-| ![Catalog](docs/screenshots/catalog.png) | ![Tool detail](docs/screenshots/tool-detail.png) |
+| ![Catalog](docs/screenshots/01-catalog.png) | ![Tool detail and request](docs/screenshots/02-tool-detail-request.png) |
 
-| Incoming requests | Loan timeline |
+| Incoming requests | Loan timeline with reminder |
 |-|-|
-| ![Dashboard, incoming requests](docs/screenshots/dashboard-incoming.png) | ![Loan timeline](docs/screenshots/loan-timeline.png) |
+| ![Dashboard, incoming requests](docs/screenshots/03-dashboard-incoming.png) | ![Loan timeline with reminder](docs/screenshots/04-loan-timeline-reminder.png) |
 
-| Admin outbox |
-|-|
-| ![Admin outbox](docs/screenshots/admin-outbox.png) |
+| Admin outbox | Notification email in Mailpit |
+|-|-|
+| ![Admin outbox](docs/screenshots/05-admin-outbox.png) | ![Notification email in Mailpit](docs/screenshots/06-mailpit-email.png) |
 
 ## Quick start
 
@@ -51,32 +51,26 @@ The script creates `.env` from `.env.example` if it is missing, generates the HM
 | n8n | http://localhost:5678 |
 | Mailpit (captured email) | http://localhost:8025 |
 
-The `n8n-import` one-shot container loads the Mailpit SMTP credential and the three workflows from `n8n/`, then activates the notification and reminder workflows before n8n starts. No manual import is needed.
+The `n8n-import` one-shot container loads the Mailpit SMTP credential and the three workflows from `n8n/`, then publishes all three workflows, including the error handler, before n8n starts. No manual import is needed.
 
 ### 2. Create the Clerk development app
 
 1. Create an application in the Clerk dashboard with email sign-in.
 2. In the dashboard, activate the Convex integration (or create a JWT template named exactly `convex`). Convex expects the application ID `convex`.
 3. Copy the Frontend API / issuer URL of the template, for example `https://example.clerk.accounts.dev`. This is `CLERK_JWT_ISSUER_DOMAIN`.
-4. Copy the publishable and secret keys into `.env.local`:
+4. Create `.env.local` (git-ignored) with the keys, the Convex URL and the two Convex CLI variables. The admin key is printed by `scripts/setup-local.sh` (re-run the script to print it again; it is safe to repeat):
 
 ```bash
 NEXT_PUBLIC_CONVEX_URL=http://127.0.0.1:3210
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
+CONVEX_SELF_HOSTED_URL=http://127.0.0.1:3210
+CONVEX_SELF_HOSTED_ADMIN_KEY=<admin key>
 ```
 
-### 3. Connect Convex and set its environment
+### 3. Set the Convex environment, then push the functions
 
-In a terminal that stays open (the admin key comes from the script output):
-
-```bash
-CONVEX_SELF_HOSTED_URL=http://127.0.0.1:3210 \
-CONVEX_SELF_HOSTED_ADMIN_KEY='<admin key>' \
-npx convex dev
-```
-
-In another terminal, with the same two variables exported (or in `.env.local`), set the deployment variables. The secrets must be the same values as in `.env`:
+Set the deployment variables first: the functions load `auth.config.ts` at push time and need `CLERK_JWT_ISSUER_DOMAIN`, so the first push fails without it. The Convex CLI reads the two `CONVEX_SELF_HOSTED_*` values from `.env.local`. The secrets must be the same values as in `.env`:
 
 ```bash
 set -a; . ./.env; set +a
@@ -88,7 +82,13 @@ npx convex env set LENDLOOP_OUTBOUND_SECRET "$LENDLOOP_OUTBOUND_SECRET"
 npx convex env set LENDLOOP_INBOUND_SECRET "$LENDLOOP_INBOUND_SECRET"
 ```
 
-The webhook URL uses the compose service name because the Convex backend runs in the same compose network as n8n.
+The webhook URL uses the compose service name because the Convex backend runs in the same compose network as n8n. Then push the functions and leave this running in its own terminal (`pnpm dev:convex` is the same command):
+
+```bash
+npx convex dev
+```
+
+If you ran `npx convex dev` before setting the variables, stop it and start it again after the `env set` commands.
 
 ### 4. Run the app
 
@@ -96,7 +96,7 @@ The webhook URL uses the compose service name because the Convex backend runs in
 pnpm dev
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3000. If `next dev` crashes with "OS file watch limit reached" (another process is using up the inotify watches), build and serve instead: `pnpm build && pnpm start`. On such hosts the Convex CLI may also need `CHOKIDAR_USEPOLLING=1 npx convex dev`.
 
 ### 5. Seed data
 
@@ -105,6 +105,8 @@ Load five demo tools owned by a placeholder member:
 ```bash
 npx convex run seed:demoTools
 ```
+
+The demo tools belong to a seed user who cannot sign in, so nobody can approve requests for them as the owner. Evaluators can sign in as an admin (see below) and approve or decline those requests from the loan page or the admin Loans tab, or list their own tools with a second account and use the normal owner flow.
 
 These are internal functions, so they can only be run through the CLI. To try the overdue reminder, approve a loan in the UI, then move its end date into the past (use the loan id from its page):
 
@@ -129,7 +131,7 @@ Admin is never granted from the client. To become admin, put your address in `AD
 
 ### Troubleshooting
 
-- If `next dev` crashes with "OS file watch limit reached", run `WATCHPACK_POLLING=true pnpm exec next dev --webpack`.
+- If `next dev` crashes with "OS file watch limit reached", run `pnpm build && pnpm start` instead. The Convex CLI may need `CHOKIDAR_USEPOLLING=1`.
 - Outbox rows stay pending with "webhook url not configured" or "outbound secret not configured": the Convex env variables from step 3 are missing. Set them; the next sweep picks the rows up. No attempt is consumed while config is missing.
 - Webhook answers 401: the secret in the n8n container differs from the one in Convex, or the clocks differ by more than 5 minutes.
 - After editing a workflow JSON, run `docker compose run --rm n8n-import && docker compose restart n8n`; activation only takes effect on restart.
@@ -140,7 +142,7 @@ Admin is never granted from the client. To become admin, put your address in `AD
 |-|-|-|-|
 | `NEXT_PUBLIC_CONVEX_URL` | Web app (`.env.local`) | No | Convex deployment URL used by the browser |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Web app | No | Clerk publishable key |
-| `CLERK_SECRET_KEY` | Web app | Yes | Clerk server key used by the Next.js middleware |
+| `CLERK_SECRET_KEY` | Web app | Yes | Clerk server key used by the Clerk proxy (`src/proxy.ts`) |
 | `CONVEX_SELF_HOSTED_URL`, `CONVEX_SELF_HOSTED_ADMIN_KEY` | Shell / `.env.local` for the Convex CLI | Admin key: yes | Point `convex dev` at the self-hosted backend |
 | `CLERK_JWT_ISSUER_DOMAIN` | Convex deployment | No | Issuer of the `convex` JWT template, used to validate tokens |
 | `ADMIN_EMAILS` | Convex deployment | No | Allowlist for the first-sign-in admin role |
@@ -161,7 +163,7 @@ Two different places hold the same two secrets on purpose: they are provisioned 
 flowchart LR
   B[Browser] -->|Clerk session| N[Next.js app]
   B -->|live queries and mutations, Clerk JWT| C[(Convex)]
-  N -.->|middleware: protect routes| Clerk
+  N -.->|Clerk proxy: protect routes| Clerk
   C -->|jwt validation| Clerk[Clerk]
   C -->|outbox delivery, signed POST| W[n8n webhook]
   W --> E[n8n workflows]
@@ -172,7 +174,7 @@ flowchart LR
   K[Convex cron every 5 min] -->|sweep pending rows| C
 ```
 
-The browser talks to Convex directly with a Clerk-issued JWT; every query and mutation checks the viewer inside Convex. Next.js only serves pages and runs the Clerk middleware that requires sign-in for everything except `/`, `/sign-in` and `/sign-up`.
+The browser talks to Convex directly with a Clerk-issued JWT; every query and mutation checks the viewer inside Convex. Next.js only serves pages and runs the Clerk proxy (`src/proxy.ts`) that requires sign-in for everything except `/`, `/sign-in` and `/sign-up`.
 
 Loan transitions write the loan, a `loanEvents` row and an `outbox` row in one Convex transaction, then schedule delivery. Convex signs and POSTs the outbox payload to n8n; n8n verifies, sends the email and answers 200. Failures are retried with backoff by Convex, and a cron sweep recovers rows left pending. For overdue loans, n8n asks Convex for the list, emails each borrower and writes each send back with an idempotency key.
 
@@ -198,8 +200,8 @@ Code layout: `src/app` pages, `src/components` UI, `convex/` backend (`lib/` hol
 | Create a tool | No | Yes | Yes | Yes |
 | Edit or archive a tool | No | No | Own tools | Any |
 | Request a loan | No | Yes (not own tool) | No (own tool) | Yes (not own tool) |
-| Cancel a request | No | Borrower only | n/a | Borrower only |
-| Approve, decline, mark returned | No | No | Own tools | Any |
+| Cancel a request | No | Borrower only | n/a | Only as the borrower, not for others |
+| Approve, decline, mark returned | No | No | Own tools | Any (loan page and admin Loans tab) |
 | View a loan and its timeline | No | Participants only | Yes | Any |
 | Outbox, retry, workflow errors, all loans | No | No | No | Yes |
 | List users and change roles | No | No | No | Yes, not own role |
@@ -256,7 +258,7 @@ docker compose exec n8n n8n export:workflow --all --separate --output=/tmp/wf
 docker compose cp n8n:/tmp/wf/. n8n/workflows/
 ```
 
-Exports contain no secrets: the workflows read `$env.LENDLOOP_*` at run time and the SMTP credential is imported separately from `n8n/credentials/`. Check a fresh export for credential data before committing it. Imported workflows are inactive in the JSON; `n8n/import.sh` activates the two that need to run.
+Exports contain no secrets: the workflows read `$env.LENDLOOP_*` at run time and the SMTP credential is imported separately from `n8n/credentials/`. Check a fresh export for credential data before committing it. Imported workflows are inactive in the JSON; `n8n/import.sh` publishes all three, including the error handler, which n8n only runs once it is published.
 
 Trigger manually:
 
@@ -286,13 +288,13 @@ A second run of the sample curl with the same `eventId` returns `{"status":"dupl
 ## Data minimization
 
 - The public catalog query has no owner field at all, so it cannot leak it. Signed-in members see the owner's first name only.
-- Between users, only first names are used in loan views, timelines and notifications. The one exception is the booked-ranges list described below.
+- Between users, only first names are used in loan views, timelines and notifications.
 - No email address is returned by any list or loan view. Emails reach the browser only for the viewer's own profile and the admin user list.
 - The admin outbox shows delivery state, attempts and errors, not the stored payload, so recipient emails stay out of the admin screen.
 - The status webhook payload carries the minimum for one email: event id, status and previous status, dates, tool name, recipient first name and email, and a link. No loan notes, no owner or borrower identifiers beyond the loan id.
 - The overdue endpoint returns the borrower's email because n8n has to send the message; it needs the signed secret and returns only overdue, not-yet-reminded loans.
 - n8n stores: workflow definitions, the SMTP credential (encrypted with `N8N_ENCRYPTION_KEY`), execution history, and up to 500 recent event ids in workflow static data. Execution history contains the webhook payloads, including recipient emails, so execution data retention should be limited (see [docs/PRODUCTION.md](docs/PRODUCTION.md)).
-- Booked date ranges on a tool page include the borrower's display name for the tool owner and admins only; other members see dates without any identity.
+- Booked date ranges on a tool page include the borrower's first name for the tool owner and admins only; other members see dates without any identity.
 
 ## Testing
 
@@ -306,7 +308,7 @@ Covered:
 
 - Roles and ownership: listing visibility, edit and archive rights, admin bootstrap (verified email, unset allowlist, no change on re-sign-in), no self-demotion.
 - Loan flow: validation, overlap and duplicate rules, every allowed and disallowed transition, approval re-checks, archive cascade, participant-only reads, first-name-only views, overdue flag.
-- Outbox: signed minimized payload, backoff and dead state after six attempts, unconfigured defer, sweep recovery, single delivery under concurrent runs, admin retry.
+- Outbox: signed minimized payload, backoff and dead state after six attempts, unconfigured defer, sweep recovery, single delivery under concurrent runs, admin retry (refused while a delivery claim is active).
 - HTTP routes: bad or stale signatures, tampered body, missing secret, oversized and chunked bodies, paging with `hasMore`, idempotent reminder and error receipts.
 - Signing: digest stability, tolerance window in both directions, unequal-length comparison.
 - n8n workflows (exported JSON): the verify and signing code nodes are executed against the same vectors, retry settings, error workflow wiring, loop structure, no secrets in the files.
@@ -323,7 +325,6 @@ There are no browser end-to-end tests.
 - Locally, mail goes to Mailpit, nothing leaves the machine. The sender address is a placeholder (`noreply@lendloop.local`).
 - Lists are bounded (200 loans per user view, 500 for admin views and users) and not paginated in the UI.
 - No rate limiting on the Convex HTTP routes beyond the signature requirement, and no account deletion flow.
-- The booked-ranges list on a tool page shows the borrower's full display name to the owner and admins, not only the first name.
 
 ## Production
 
