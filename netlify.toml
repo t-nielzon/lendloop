@@ -1,0 +1,4 @@
+# the convex backend is deployed separately with `npx convex deploy`; this builds only the next.js app
+[build]
+  command = "pnpm build"
+  publish = ".next"
