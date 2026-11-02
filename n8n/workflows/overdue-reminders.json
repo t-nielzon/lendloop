@@ -39,6 +39,17 @@
       ]
     },
     {
+      "parameters": {},
+      "id": "a2000002-0000-4000-8000-000000000099",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        260
+      ]
+    },
+    {
       "parameters": {
         "mode": "runOnceForAllItems",
         "jsCode": "const crypto = require('crypto');\nconst sign = (secret, timestamp, body) =>\n  'v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\nconst signedRequest = (path, bodyObject) => {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const base = String($env.LENDLOOP_CONVEX_SITE_URL || 'http://convex-backend:3211').replace(/\\/+$/, '');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const body = JSON.stringify(bodyObject);\n  return {\n    url: base + path,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-LendLoop-Timestamp': timestamp,\n      'X-LendLoop-Signature': sign(secret, timestamp, body),\n      'X-LendLoop-Event-Id': bodyObject.idempotencyKey || ''\n    }\n  };\n};\nconst asOf = new Date().toLocaleDateString('en-CA', { timeZone: $env.GENERIC_TIMEZONE || 'UTC' });\nreturn [{ json: { asOf, ...signedRequest('/n8n/overdue-loans', { asOf }) } }];"
@@ -425,6 +436,17 @@
         [
           {
             "node": "Fail if any failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Sign overdue request",
             "type": "main",
             "index": 0
           }
