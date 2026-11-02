@@ -11,7 +11,7 @@ The repository runs as a local stack: self-hosted Convex, a single n8n container
 | Web | `pnpm dev` | Built Next.js app on a managed host, HTTPS only |
 | n8n | One container, SQLite, static-data dedupe | Queue mode, Postgres, Redis, backups, durable dedupe |
 | Mail | Mailpit | Transactional provider with SPF, DKIM, DMARC |
-| Secrets | `.env` files | Secrets manager with rotation |
+| Secrets | `.env` files, manual dual-secret rotation | Secrets manager, scheduled and audited rotation |
 | Alerting | Admin console and one email | Dead-letter and failure alerts to an on-call channel |
 
 ## 1. Convex and Clerk
@@ -41,12 +41,12 @@ Single-container n8n with SQLite is fine locally, not for production.
 Four secrets matter: the two HMAC secrets, `CLERK_SECRET_KEY` and `N8N_ENCRYPTION_KEY`.
 
 - Store them in a managed secrets store and inject them at deploy time; do not keep them in `.env` files on servers.
-- Rotate the HMAC secrets without downtime using an overlap window. This needs a small code change on the verifying side, because today each side accepts exactly one secret:
-  1. Add `LENDLOOP_INBOUND_SECRET_NEXT` (and the outbound equivalent) to the verifier. It accepts a signature that matches either the current or the next secret.
-  2. Deploy verifiers first (Convex for inbound, n8n for outbound), with both secrets present.
-  3. Switch the signers to the new secret.
-  4. After at least one full retry window (the outbox gives up after about 7 hours and the signature window is 5 minutes, so 24 hours is a safe margin), remove the old secret and promote the new one.
-- Rotate on a schedule (for example every 90 days) and immediately after any suspected exposure or staff change. Because the directions use different secrets, a leak of one does not require rotating the other.
+- HMAC rotation without downtime is implemented. Each side accepts a current and an optional previous secret (`LENDLOOP_INBOUND_SECRET_PREVIOUS` in Convex, `LENDLOOP_OUTBOUND_SECRET_PREVIOUS` in n8n), and signing always uses the current one. The commands are in the README ("Rotating the signing secrets"). In production keep the previous secret in place for at least one full retry window before removing it (the outbox gives up after about 7 hours and the signature window is 5 minutes, so 24 hours is a safe margin).
+- What remains:
+  1. Source the secrets from the managed store and run the rotation steps from the deploy pipeline instead of by hand.
+  2. Rotate on a schedule (for example every 90 days) and immediately after any suspected exposure or staff change, automated rather than calendar-driven.
+  3. Audit: record who rotated which secret and when, and alert if a previous secret stays set longer than the overlap window or if requests keep arriving signed with it.
+- Because the directions use different secrets, a leak of one does not require rotating the other.
 - Rotating `N8N_ENCRYPTION_KEY` means exporting credentials, re-encrypting and re-importing; plan it as a maintenance task, not a routine one.
 
 ## 4. Email
@@ -74,7 +74,7 @@ Either way, keep the order: check, send, then record. The remaining duplicate wi
 
 ## 7. Observability and alerting
 
-- Dead letters: alert when any `outbox` row reaches `dead` (the `notification_failed` event is the hook) and when pending rows are older than 15 minutes. Today these are visible only in the admin console. A scheduled Convex query that counts them and posts to a Slack or pager webhook is enough.
+- Dead letters: alert when any `outbox` row reaches `dead` (the `notification_failed` event is the hook) and when pending rows are older than 15 minutes. The delivery health workflow already emails `LENDLOOP_ALERT_EMAIL` once per incident (dead rows, or pending rows older than 30 minutes) and records it in the admin Health alerts tab. What remains is routing that alert to a pager or chat channel and tightening the stuck threshold if needed.
 - Workflow failures: the error handler already writes to `automationErrors` and emails an address. Point that address at a shared mailbox or forward it to the on-call channel.
 - Metrics to track: deliveries per hour, delivery latency (outbox `createdAt` to `deliveredAt`), attempts per delivered row, dead count, reminder run duration and failed count, n8n queue depth and worker health, SMTP bounce rate.
 - Logs: forward Convex logs through a log drain and n8n logs to the platform's log store. Do not log recipient emails or payload bodies.
@@ -115,7 +115,7 @@ Run on every pull request:
 3. `pnpm lint`
 4. `pnpm test` (Convex functions, signing, workflow JSON checks)
 5. `pnpm build`
-6. Workflow import smoke test: start n8n in a container, run `n8n/import.sh`, check `/healthz`, then post a correctly signed sample event with `scripts/sign-request.mjs` to a Mailpit-backed instance and assert one message arrives and a repeat returns `duplicate`.
+6. Workflow import smoke test (in place today as the `n8n-smoke` job): start n8n and Mailpit with generated secrets, import and publish the six workflows, post a correctly signed sample event and assert 200 with one message in Mailpit, an unsigned request returns 401, a previous-secret signature returns 200, and all six workflows are listed.
 7. Secret scan on the diff and on the exported workflow files.
 
 Deploy on merge to the main branch: Convex deploy, Next.js deploy, then n8n workflow import to production, in that order.

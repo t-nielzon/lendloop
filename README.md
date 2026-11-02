@@ -1,6 +1,8 @@
 # LendLoop
 
-LendLoop is a small community tool-lending app. Neighbours list tools they are willing to lend, other members request a date range, owners approve or decline, and everyone is kept informed by email. The web app is Next.js 16 (App Router) with Clerk for sign-in and Convex for data and server logic. A self-hosted n8n instance sends the emails and runs a daily overdue-reminder job, and talks to Convex only through signed HTTP calls.
+[![ci](https://github.com/t-nielzon/lendloop/actions/workflows/ci.yml/badge.svg)](https://github.com/t-nielzon/lendloop/actions/workflows/ci.yml)
+
+LendLoop is a small community tool-lending app. Neighbours list tools they are willing to lend, other members request a date range, owners approve or decline, and everyone is kept informed by email. The web app is Next.js 16 (App Router) with Clerk for sign-in and Convex for data and server logic. A self-hosted n8n instance sends the emails and runs the scheduled reminder, follow-up and health-check jobs, and talks to Convex only through signed HTTP calls.
 
 Features:
 
@@ -10,8 +12,11 @@ Features:
 - Owner dashboard: incoming requests, approve, decline, mark returned. Borrower view: my requests, cancel.
 - Loan detail page with a full event timeline, including notification and reminder events written back by n8n.
 - Email notifications on every status change, delivered through an outbox with retries and a dead-letter state.
-- Daily overdue reminders, at most one per loan per day.
-- Admin console: delivery outbox with manual retry, workflow failures reported by n8n, all loans, user roles.
+- Daily overdue reminders, at most one per loan per day, plus a pickup reminder the day before a loan starts and a nudge to the owner when a request waits more than 48 hours.
+- Requests that nobody decided before their start date expire automatically and the borrower is notified.
+- Automation activity on each loan: the latest event shows on every row ("Reminder sent 2 days ago") and in full on the timeline.
+- Delivery health alerts: an email to the alert address when notifications are dead or stuck, listed in the admin console.
+- Admin console: delivery outbox with manual retry, health alerts, workflow failures reported by n8n, all loans, user roles.
 
 ## Screenshots
 
@@ -26,6 +31,14 @@ Features:
 | Admin outbox | Notification email in Mailpit |
 |-|-|
 | ![Admin outbox](docs/screenshots/05-admin-outbox.png) | ![Notification email in Mailpit](docs/screenshots/06-mailpit-email.png) |
+
+| Admin health alerts |
+|-|
+| ![Admin health alerts](docs/screenshots/07-admin-health-alerts.png) |
+
+## Hosted demo
+
+https://lendloop.nielzontolentino.com (being set up) runs the app on Netlify with a Convex cloud deployment and a Clerk development instance. n8n is not hosted there, so status notifications queue in the outbox and show as pending in the admin console. The full automation path (emails, reminders, follow-ups, health alerts) runs in the local docker-compose stack described below.
 
 ## Quick start
 
@@ -51,7 +64,7 @@ The script creates `.env` from `.env.example` if it is missing, generates the HM
 | n8n | http://localhost:5678 |
 | Mailpit (captured email) | http://localhost:8025 |
 
-The `n8n-import` one-shot container loads the Mailpit SMTP credential and the three workflows from `n8n/`, then publishes all three workflows, including the error handler, before n8n starts. No manual import is needed.
+The `n8n-import` one-shot container loads the Mailpit SMTP credential and the six workflows from `n8n/`, then publishes all six workflows, including the error handler, before n8n starts. No manual import is needed.
 
 ### 2. Create the Clerk development app
 
@@ -100,14 +113,14 @@ Open http://localhost:3000. If `next dev` crashes with "OS file watch limit reac
 
 ### 5. Seed data
 
-Load a lived-in demo neighbourhood: ten neighbours, 28 tools across every category (two archived) and 35 loans in every state, with dates relative to today and a full event timeline for each:
+Load a lived-in demo neighbourhood: ten neighbours, 28 tools across every category (two archived) and 35 loans in every state (including one expired), with dates relative to today and a full event timeline for each:
 
 ```bash
 npx convex run seed:demo       # inserts only if the seed neighbours do not exist yet
 npx convex run seed:resetDemo  # deletes seed-owned data and reseeds with fresh dates
 ```
 
-The seed neighbours use `example.com` addresses and a `seed|` token prefix, so they cannot sign in and nobody can be emailed. Nobody can approve requests for their tools as the owner, so evaluators can sign in as an admin (see below) and approve or decline those requests from the loan page or the admin Loans tab, or list their own tools with a second account and use the normal owner flow. Seeding writes documents directly and never queues notification deliveries. `seed:resetDemo` touches only seed users, their tools, loans on those tools or by those users, and their events; it also removes the older `seed:demoTools` placeholder owner.
+The seed neighbours use `example.com` addresses and a `seed|` token prefix, so they cannot sign in and nobody can be emailed. Nobody can approve requests for their tools as the owner, so evaluators can sign in as an admin (see below) and approve or decline those requests from the loan page or the admin Loans tab, or list their own tools with a second account and use the normal owner flow. Seeding writes documents directly and never queues notification deliveries. `seed:demo` is safe to repeat; `seed:resetDemo` touches only seed users, their tools, loans on those tools or by those users, and their events; it also removes the older `seed:demoTools` placeholder owner.
 
 The older `seed:demoTools` (five tools owned by a single placeholder member) still works.
 
@@ -153,10 +166,14 @@ Admin is never granted from the client. To become admin, put your address in `AD
 | `N8N_LOAN_STATUS_WEBHOOK_URL` | Convex deployment | No | Where the outbox delivers status changes |
 | `LENDLOOP_OUTBOUND_SECRET` | Convex deployment and n8n container (compose `.env`) | Yes | Signs Convex to n8n requests |
 | `LENDLOOP_INBOUND_SECRET` | Convex deployment and n8n container (compose `.env`) | Yes | Signs n8n to Convex requests |
+| `LENDLOOP_OUTBOUND_SECRET_PREVIOUS` | n8n container (compose `.env`) | Yes | Optional, rotation only: old Convex to n8n secret that n8n still accepts. Leave empty otherwise |
+| `LENDLOOP_INBOUND_SECRET_PREVIOUS` | Convex deployment | Yes | Optional, rotation only: old n8n to Convex secret that Convex still accepts. Leave empty otherwise |
+| `N8N_HOST_PORT` | Compose `.env` | No | Host port for the n8n UI and webhook (default `5678`) |
+| `MAILPIT_HTTP_PORT`, `MAILPIT_SMTP_PORT` | Compose `.env` | No | Host ports for the Mailpit UI and SMTP (defaults `8025`, `1025`) |
 | `N8N_ENCRYPTION_KEY` | Compose `.env` | Yes | Encrypts n8n credentials at rest; generated by the setup script |
 | `LENDLOOP_CONVEX_SITE_URL` | Compose `.env`, n8n container | No | Convex HTTP actions origin as seen from n8n (default `http://convex-backend:3211`) |
 | `LENDLOOP_ALERT_EMAIL` | Compose `.env`, n8n container | No | Recipient of workflow failure alerts |
-| `GENERIC_TIMEZONE` | Compose `.env`, n8n container | No | Timezone of the 09:00 schedule and of the reminder date (default `UTC`) |
+| `GENERIC_TIMEZONE` | Compose `.env`, n8n container | No | Timezone of the schedules and of the reminder dates (default `UTC`) |
 
 Two different places hold the same two secrets on purpose: they are provisioned twice (compose `.env` and `npx convex env set`) because the two systems share no secret store locally. `.env` is git-ignored.
 
@@ -219,9 +236,11 @@ stateDiagram-v2
   requested --> approved: owner or admin approves
   requested --> declined: owner or admin declines, or tool archived
   requested --> cancelled: borrower cancels
+  requested --> expired: automation, start date passed with no decision
   approved --> returned: owner or admin marks returned
   declined --> [*]
   cancelled --> [*]
+  expired --> [*]
   returned --> [*]
 ```
 
@@ -231,23 +250,29 @@ Rules enforced on the server:
 - Approval re-checks overlap, that the tool is still active and that the start date has not passed, since another request may have been approved in the meantime.
 - Archiving a tool declines its open requests (with a "tool archived" event) and notifies the borrowers.
 - An approved loan whose end date has passed is shown as overdue and keeps the tool unavailable until it is returned.
+- `expired` is set only by the stale-request workflow through Convex, never by a user. It applies to a still-requested loan whose start date has passed; if the owner decided first the call is skipped.
 - Every transition writes an audit event and queues a notification: `requested` and `cancelled` go to the owner, the others to the borrower.
 
 ## n8n workflows
 
 Exported JSON lives in `n8n/workflows/` with fixed ids, so re-importing updates in place.
 
-| Workflow | Trigger | What it does |
-|-|-|-|
-| Loan status notification | Webhook `POST /webhook/lendloop/loan-status` | Verifies the signature on the raw body, rejects invalid payloads, acknowledges duplicate event ids without a second email, composes and sends the email, remembers the event id, answers 200. A failed send answers 500 |
-| Daily overdue reminders | Schedule `0 9 * * *` (instance timezone) | Signs and calls `/n8n/overdue-loans`, loops over the loans one at a time, sends one email per borrower, writes each send back to `/n8n/reminder-sent` immediately, pages again while `hasMore` (maximum 10 pages), and fails the run at the end if any loan failed |
-| Error handler | Error trigger | Set as the error workflow of the other two. Reports the failure to `/n8n/workflow-error` first, then emails `LENDLOOP_ALERT_EMAIL` |
+| Workflow | Trigger | What it does | Write-back and idempotency key | Failure handling |
+|-|-|-|-|-|
+| Loan status notification | Webhook `POST /webhook/lendloop/loan-status` | Verifies the signature on the raw body, rejects invalid payloads, sends the status email, answers 200 | None to Convex (Convex records delivery from the 200). Dedupe by `eventId` in static data, recorded after the send | A failed send answers 500 so the outbox retries |
+| Daily overdue reminders | Schedule `0 9 * * *`, plus manual | Calls `/n8n/overdue-loans`, one email per borrower, pages while `hasMore` (maximum 10 pages) | `/n8n/reminder-sent`, key `overdue-reminder:<loanId>:<date>` | Per-loan failures are recorded and skipped; the run fails at the end if any failed |
+| Pickup reminders | Schedule `0 8 * * *`, plus manual | Calls `/n8n/upcoming-pickups` for approved loans starting tomorrow, emails borrower and owner, pages while `hasMore` (maximum 10 pages) | `/n8n/pickup-reminder-sent`, key `pickup-reminder:<loanId>:<date>`, written only after both emails went out | Same per-loan isolation and end-of-run failure |
+| Stale request follow-up | Schedule `0 10 * * *`, plus manual | Calls `/n8n/stale-requests`. Requests undecided for 48 hours or more get one email to the owner; requests whose start date has passed are expired through Convex, which notifies the borrower | Nudge: `/n8n/request-nudged`, key `request-nudge:<loanId>`. Expiry: `/n8n/expire-request`, key `request-expire:<loanId>`; `skipped` (owner decided first) counts as success | Same per-item isolation and end-of-run failure |
+| Delivery health monitor | Schedule every 15 minutes, plus manual | Calls `/n8n/delivery-health`; when dead or stuck notifications exist and the incident was not alerted yet, emails `LENDLOOP_ALERT_EMAIL` | `/n8n/health-alert-sent`, key `health-alert:<incidentKey>`; the incident key is remembered in static data (last 100) only after the write-back | A failed email or write-back fails the run |
+| Error handler | Error trigger | Reports the failure to `/n8n/workflow-error`, then emails `LENDLOOP_ALERT_EMAIL` | `workflow-error:<executionId>` | Its two steps retry 3 times and continue on error |
+
+All five other workflows name the error handler as their error workflow.
 
 Reliability:
 
 - Retries: HTTP nodes retry 3 times and email nodes 2 times with a 3 to 5 second wait. The error handler's two steps retry 3 times and continue on error, so an email outage never loses the Convex record.
-- Idempotency: status events are deduplicated by `eventId`, which is only recorded after the email went out (a crash between sending and recording can cause one duplicate email, never a lost one). Reminders and error reports use deterministic keys (`overdue-reminder:<loanId>:<date>`, `workflow-error:<executionId>`) that Convex stores as receipts, so a retried write-back is a no-op.
-- Isolation: in the reminder loop a failed address or write-back is recorded and the loop continues with the next borrower.
+- Idempotency: status events are deduplicated by `eventId`, which is only recorded after the email went out (a crash between sending and recording can cause one duplicate email, never a lost one). The write-backs use deterministic keys (listed in the table) that Convex stores as receipts, so a retried write-back is a no-op.
+- Isolation: in the reminder and follow-up loops a failed address or write-back is recorded and the loop continues with the next borrower.
 - Convex side: a non-2xx or timeout from n8n is retried by the outbox (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 
 Import and export:
@@ -261,7 +286,7 @@ docker compose exec n8n n8n export:workflow --all --separate --output=/tmp/wf
 docker compose cp n8n:/tmp/wf/. n8n/workflows/
 ```
 
-Exports contain no secrets: the workflows read `$env.LENDLOOP_*` at run time and the SMTP credential is imported separately from `n8n/credentials/`. Check a fresh export for credential data before committing it. Imported workflows are inactive in the JSON; `n8n/import.sh` publishes all three, including the error handler, which n8n only runs once it is published.
+Exports contain no secrets: the workflows read `$env.LENDLOOP_*` at run time and the SMTP credential is imported separately from `n8n/credentials/`. Check a fresh export for credential data before committing it. Imported workflows are inactive in the JSON; `n8n/import.sh` publishes all six, including the error handler, which n8n only runs once it is published.
 
 Trigger manually:
 
@@ -270,14 +295,46 @@ Trigger manually:
 node scripts/sign-request.mjs "$LENDLOOP_OUTBOUND_SECRET" http://localhost:5678/webhook/lendloop/loan-status | sh
 
 # overdue reminders: back-date an approved loan (see Seed data), then open the workflow in the n8n UI and use "Execute workflow"
+# the other three scheduled workflows have a manual trigger too: open them in the n8n UI and use "Execute workflow"
 ```
 
 A second run of the sample curl with the same `eventId` returns `{"status":"duplicate"}`. Pass your own body as the third argument, or `--timestamp <unix-seconds>` with an old value to see the 401 for a stale request.
+
+## Rotating the signing secrets
+
+Each direction accepts a current and an optional previous secret, so a rotation needs no downtime. Signing always uses the current secret. Verification tries both in constant time, and an empty previous secret is ignored. Generate new values with `openssl rand -hex 32`. Compose reads `.env` only when a container is created, so use `up -d` (not `restart`) after editing it.
+
+Outbound (Convex to n8n):
+
+```bash
+# 1. n8n accepts the new secret as current and the old one as previous
+#    in the compose .env: LENDLOOP_OUTBOUND_SECRET=<new>, LENDLOOP_OUTBOUND_SECRET_PREVIOUS=<old>
+docker compose up -d n8n
+# 2. Convex starts signing with the new secret
+npx convex env set LENDLOOP_OUTBOUND_SECRET '<new>'
+# 3. once the outbox has no deliveries signed with the old secret, clear LENDLOOP_OUTBOUND_SECRET_PREVIOUS in .env
+docker compose up -d n8n
+```
+
+Inbound (n8n to Convex):
+
+```bash
+# 1. Convex accepts the new secret as current and the old one as previous
+npx convex env set LENDLOOP_INBOUND_SECRET_PREVIOUS '<old>'
+npx convex env set LENDLOOP_INBOUND_SECRET '<new>'
+# 2. n8n starts signing with the new secret: set LENDLOOP_INBOUND_SECRET=<new> in the compose .env
+docker compose up -d n8n
+# 3. after the next scheduled runs succeed, remove the previous secret from Convex
+npx convex env remove LENDLOOP_INBOUND_SECRET_PREVIOUS
+```
+
+Verify the outbound window locally with `scripts/n8n-smoke.sh`, which checks that the previous secret is accepted.
 
 ## Security decisions
 
 - Request signing. Both directions use `HMAC-SHA256` over `<unix timestamp>.<raw body>`, sent as `X-LendLoop-Signature: v1=<hex>` with `X-LendLoop-Timestamp`. Requests more than 300 seconds off the server clock are rejected in both directions, which limits replay. The signature is checked on the raw body bytes before any JSON parsing.
 - Constant-time comparison. Signatures are compared without early exit in Convex and with `timingSafeEqual` in n8n.
+- Dual-secret rotation. Either side accepts a previous secret during a rotation window; see the runbook above.
 - Separate secrets per direction. `LENDLOOP_OUTBOUND_SECRET` (Convex to n8n) and `LENDLOOP_INBOUND_SECRET` (n8n to Convex) are different, so a leak of one does not allow forging the other direction.
 - Fail closed. A missing secret fails verification on both sides (401); on the Convex sender a missing secret or URL defers the delivery instead of sending unsigned.
 - Size limits. Inbound HTTP bodies are capped at 64 KiB, counted while streaming so a missing or false `Content-Length` does not bypass the cap. Fields are length checked and stored error messages are truncated.
@@ -317,6 +374,13 @@ Covered:
 - n8n workflows (exported JSON): the verify and signing code nodes are executed against the same vectors, retry settings, error workflow wiring, loop structure, no secrets in the files.
 
 There are no browser end-to-end tests.
+
+### CI
+
+`.github/workflows/ci.yml` runs two jobs on every push to `main` and every pull request:
+
+- `check`: install with the frozen lockfile, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`.
+- `n8n-smoke`: runs `scripts/n8n-smoke.sh`, which generates throwaway secrets and boots only n8n, the import job and Mailpit (no Convex). It proves a correctly signed status webhook returns 200 and a message reaches Mailpit, an unsigned request and a wrong-secret request return 401, a request signed with the previous secret returns 200, and `n8n list:workflow` shows all six workflows.
 
 ## Known limitations and trade-offs
 

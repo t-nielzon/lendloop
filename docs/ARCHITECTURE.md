@@ -19,14 +19,16 @@ The rule that keeps this simple: Convex decides what is true and what must be se
 |-|-|-|
 | `users` | `tokenIdentifier`, `name`, `email`, `role` (`admin` or `user`) | Created on first sign-in by `users.store`. Index `by_token`, `by_email`. Role is only set at creation |
 | `tools` | `ownerId`, `name`, `description`, `category`, `condition`, `status` (`active` or `archived`) | Search index on `name`, filterable by status and category. Archived tools stay for history |
-| `loans` | `toolId`, `ownerId`, `borrowerId`, `startDate`, `endDate` (`YYYY-MM-DD`), `status`, `note`, `lastReminderOn`, `reminderCount` | `ownerId` is copied from the tool at request time. Index `by_tool_status` (overlap checks), `by_borrower`, `by_owner`, `by_status_endDate` (overdue scan) |
-| `loanEvents` | `loanId`, `at`, `actorType` (`user`, `automation`, `system`), `actorId`, `type`, `detail` | Append-only timeline. Types: the five statuses plus `notification_delivered`, `notification_failed`, `reminder_sent` |
+| `loans` | `toolId`, `ownerId`, `borrowerId`, `startDate`, `endDate` (`YYYY-MM-DD`), `status`, `note`, `lastReminderOn`, `reminderCount`, `pickupReminderOn`, `nudgedAt`, `lastAutomationAt`, `lastAutomationType` | `status` also has `expired` (set by automation only). `pickupReminderOn` (date) and `nudgedAt` mark that the pickup reminder or owner nudge was already sent. `ownerId` is copied from the tool at request time. Index `by_tool_status` (overlap checks), `by_borrower`, `by_owner`, `by_status_endDate` (overdue scan) |
+| `loanEvents` | `loanId`, `at`, `actorType` (`user`, `automation`, `system`), `actorId`, `type`, `detail` | Append-only timeline. Types: the statuses plus `notification_delivered`, `notification_failed`, `reminder_sent`, `pickup_reminder_sent`, `request_nudged`, `expired` |
 | `outbox` | `eventId`, `loanId`, `payload`, `status` (`pending`, `delivered`, `dead`), `attempts`, `nextAttemptAt`, `lastError` | One row per status notification. Index `by_status`, `by_status_nextAttemptAt` |
 | `webhookReceipts` | `idempotencyKey`, `kind`, `loanId`, `receivedAt` | Dedupe record for inbound n8n calls. Index `by_key` |
+| `healthAlerts` | `incidentKey`, `dead`, `stuckPending`, `oldestStuckAt`, `sentAt` | One row per alerted outbox incident. Index `by_key`, `by_sent`. Latest 50 shown in the admin Health alerts tab |
 | `automationErrors` | `workflowName`, `nodeName`, `executionId`, `message`, `idempotencyKey` | Failures reported by the n8n error handler. Shown in the admin console |
 
 Design choices:
 
+- `lastAutomationAt` and `lastAutomationType` on `loans` are denormalized from the event log. Every insert of an automation event (`notification_delivered`, `notification_failed`, `reminder_sent`, `pickup_reminder_sent`, `request_nudged`, `expired`) patches them in the same mutation. List views then show "Reminder sent 2 days ago" from the loan row alone, instead of reading the event table once per row (up to 200 rows per list). The cost is one extra patch per automation event and a second place that must stay in sync, which is why it lives in the single event-insert helper. The event log stays the source of truth.
 - Dates are plain strings, not timestamps. A loan covers whole calendar days, and string comparison on ISO dates sorts correctly and is easy to index. The cost is that "today" is defined by the server in UTC.
 - Overlap is checked against approved loans only. Pending requests may overlap each other, and the second approval is rejected at approval time.
 - `loanEvents` stores references and short details, never email addresses.
@@ -74,6 +76,10 @@ Guarantee: at least once. n8n's event-id check makes a repeat harmless in the no
 |-|-|-|-|
 | Convex to n8n | `eventId` (UUID per outbox row) | n8n workflow static data, last 500 ids | `200 {"status":"duplicate"}`, no second email |
 | n8n to Convex, reminder | `overdue-reminder:<loanId>:<YYYY-MM-DD>` | `webhookReceipts` | `200 {"status":"duplicate"}`, no second increment |
+| n8n to Convex, pickup reminder | `pickup-reminder:<loanId>:<YYYY-MM-DD>` | `webhookReceipts` | `duplicate`, no second event |
+| n8n to Convex, owner nudge | `request-nudge:<loanId>` | `webhookReceipts` | `duplicate`, `nudgedAt` unchanged |
+| n8n to Convex, expiry | `request-expire:<loanId>` | `webhookReceipts` | `duplicate`; `skipped` if the loan is no longer requested |
+| n8n to Convex, health alert | `health-alert:<incidentKey>` | `webhookReceipts` and `healthAlerts` | `duplicate`, one alert row per incident |
 | n8n to Convex, error | `workflow-error:<executionId>` | `webhookReceipts` | `200`, one `automationErrors` row only |
 
 For reminders the key is validated against the loan id and date in the body, and the receipt insert, `lastReminderOn` patch, `reminderCount` increment and `reminder_sent` event are one transaction. `/n8n/overdue-loans` also filters out loans whose `lastReminderOn` equals the requested day, so a second run on the same day finds nothing to send even if receipts were lost.
@@ -82,9 +88,11 @@ For reminders the key is validated against the loan id and date in the body, and
 
 Both directions: `X-LendLoop-Signature: v1=hex(HMAC_SHA256(secret, timestamp + "." + rawBody))`, `X-LendLoop-Timestamp` in unix seconds, tolerance 300 seconds each way. The timestamp must be 1 to 12 digits. Direction secrets differ.
 
+Each direction also accepts an optional previous secret (`LENDLOOP_INBOUND_SECRET_PREVIOUS` in Convex, `LENDLOOP_OUTBOUND_SECRET_PREVIOUS` in n8n) so a secret can be rotated with an overlap window. Signing uses the current secret only; verification tries each configured secret and ignores an empty one. The runbook is in the README.
+
 Convex side (`convex/http.ts`): reject on declared `Content-Length` over 64 KiB, read the stream with a running byte count and abort over the cap, verify the signature on the raw text, only then `JSON.parse`, then validate each field. Order of failure responses: 413, 401, 400.
 
-n8n side (`Verify signature` node): reads the raw body (the webhook has `rawBody` enabled), applies the same timestamp window, compares with `timingSafeEqual` and rejects a missing `LENDLOOP_OUTBOUND_SECRET`. It also requires a string `eventId` and a non-blank recipient email (400 otherwise).
+n8n side (`Verify signature` node): reads the raw body (the webhook has `rawBody` enabled), applies the same timestamp window, compares with `timingSafeEqual` and rejects a missing `LENDLOOP_OUTBOUND_SECRET` (the previous secret is tried as well when set). It also requires a string `eventId` and a non-blank recipient email (400 otherwise).
 
 `scripts/sign-request.mjs` implements the same scheme for manual testing.
 
@@ -176,6 +184,99 @@ Failure handling:
 - If the email is sent but the write-back fails after its retries, the loan is recorded as failed and left without a receipt. A rerun on the same day sends that borrower one more reminder. This is the accepted trade-off of at-least-once delivery.
 - Paging only continues while a page produced at least one success. Otherwise the same failing loans would fill every page.
 - Failures are accumulated and the run is failed at the end, which triggers the error workflow. One bad address never blocks the others.
+
+## Sequence: pickup reminder
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant T as n8n schedule 08:00
+  participant N as n8n workflow
+  participant H as Convex /n8n routes
+  participant D as Convex data
+  participant M as SMTP
+  T->>N: start run
+  N->>H: POST /n8n/upcoming-pickups {asOf} (signed)
+  H->>D: approved loans, startDate = asOf + 1 day, pickupReminderOn != asOf (max 200)
+  H-->>N: loans[], hasMore
+  loop each loan, one at a time
+    N->>M: email borrower
+    N->>M: email owner
+    alt both sent
+      N->>H: POST /n8n/pickup-reminder-sent {key, loanId, asOf}
+      H->>D: one transaction: receipt, pickupReminderOn, pickup_reminder_sent event, lastAutomation
+      H-->>N: recorded or duplicate
+    else either failed
+      N->>N: record error, continue
+    end
+  end
+```
+
+The write-back happens only after both emails went out. If the owner email fails after the borrower email succeeded, the next run repeats both; one duplicate borrower email is the accepted cost of never skipping a reminder. Filtering on `pickupReminderOn` before the 200 limit keeps already-reminded loans from filling the page.
+
+## Sequence: stale follow-up with expiry
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant T as n8n schedule 10:00
+  participant N as n8n workflow
+  participant H as Convex /n8n routes
+  participant D as Convex data
+  participant O as Convex outbox
+  participant W as n8n status webhook (workflow 1)
+  participant M as SMTP
+  T->>N: start run
+  N->>H: POST /n8n/stale-requests {asOf}
+  H-->>N: toNudge[] (requested, 48h or older, start not passed, not nudged), toExpire[] (requested, start passed)
+  loop each toNudge
+    N->>M: email owner, request waiting
+    N->>H: POST /n8n/request-nudged {request-nudge:loanId}
+    H->>D: receipt, nudgedAt, request_nudged event
+  end
+  loop each toExpire
+    N->>H: POST /n8n/expire-request {request-expire:loanId}
+    alt still requested and start passed
+      H->>D: one transaction: status expired, expired event, outbox row for the borrower
+      H-->>N: recorded
+      O->>W: signed loan.status_changed (status expired)
+      W->>M: email borrower
+    else decided meanwhile
+      H-->>N: skipped (200)
+    end
+  end
+```
+
+Expiry is a normal status transition, so the borrower email goes through the same outbox, retry and dead-letter path as every other notification. This workflow never emails for expiry. `skipped` is a 200 so n8n does not fail a run because the owner decided first.
+
+## Sequence: delivery health monitor with incident dedupe
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant T as n8n schedule every 15 min
+  participant N as n8n workflow
+  participant H as Convex /n8n routes
+  participant D as Convex data
+  participant M as SMTP
+  T->>N: start run
+  N->>H: POST /n8n/delivery-health {}
+  H->>D: count dead outbox rows and pending rows older than 30 min
+  H-->>N: dead, stuckPending, oldestStuckAt, incidentKey (null when both are 0)
+  alt incidentKey null
+    N->>N: stop
+  else key already in static data (last 100)
+    N->>N: stop
+  else new incident
+    N->>M: email LENDLOOP_ALERT_EMAIL with counts
+    N->>H: POST /n8n/health-alert-sent {health-alert:incidentKey, counts}
+    H->>D: insert healthAlerts once per key
+    H-->>N: recorded or duplicate
+    N->>N: remember incidentKey
+  end
+```
+
+The incident key is the first 16 hex characters of a SHA-256 over the sorted ids of the dead and stuck rows. The same set of problem rows keeps the same key, so the 15-minute schedule alerts once per incident; the set changing (a new dead row, or one resolved) produces a new key. Two layers dedupe: n8n static data avoids repeat emails, and the `healthAlerts` receipt makes the write-back idempotent if static data is lost. The key is remembered only after the write-back, so a failed run alerts again on the next tick.
 
 ## Error reporting
 
