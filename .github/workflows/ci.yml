@@ -19,4 +19,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      # the build only needs a syntactically valid url; no backend is contacted at build time
       - run: pnpm build
+        env:
+          NEXT_PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
