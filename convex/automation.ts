@@ -3,7 +3,7 @@ import type { Doc } from "./_generated/dataModel";
 import { internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import { firstName } from "./lib/auth";
 import { insertLoanEvent } from "./lib/loanEvents";
-import { addDays, diffDays, todayUtc } from "./lib/dates";
+import { addDays, diffDays } from "./lib/dates";
 import { recordTransition } from "./lib/loanFlow";
 
 export const OVERDUE_PAGE_SIZE = 200;
@@ -179,15 +179,20 @@ export const recordPickupReminder = internalMutation({
 
 export const recordNudge = internalMutation({
   args: { idempotencyKey: v.string(), loanId: v.string() },
-  handler: (ctx, args) =>
-    recordStage(
+  handler: async (ctx, args): Promise<"recorded" | "duplicate" | "skipped" | "invalid"> => {
+    const loanId = ctx.db.normalizeId("loans", args.loanId);
+    const loan = loanId ? await ctx.db.get(loanId) : null;
+    // a decision made after the email went out must not leave a nudge trace on the loan
+    if (loan && loan.status !== "requested" && args.idempotencyKey === `request-nudge:${args.loanId}`) return "skipped";
+    return recordStage(
       ctx,
       args,
       `request-nudge:${args.loanId}`,
       { receiptKind: "request-nudged", type: "request_nudged" },
       (now) => ({ nudgedAt: now }),
       "owner nudged after 48 hours without a decision",
-    ),
+    );
+  },
 });
 
 export const staleRequests = internalQuery({
@@ -236,14 +241,14 @@ export const staleRequests = internalQuery({
 
 // a loan decided or already expired in the meantime is skipped, never failed, so n8n does not error on a race the human won
 export const expireRequest = internalMutation({
-  args: { idempotencyKey: v.string(), loanId: v.string() },
+  args: { idempotencyKey: v.string(), loanId: v.string(), asOf: v.string() },
   handler: async (ctx, args): Promise<"recorded" | "duplicate" | "skipped" | "invalid"> => {
     const loanId = ctx.db.normalizeId("loans", args.loanId);
     if (!loanId || args.idempotencyKey !== `request-expire:${args.loanId}`) return "invalid";
     const loan = await ctx.db.get(loanId);
     if (!loan) return "invalid";
     if (await seenKey(ctx, args.idempotencyKey)) return "duplicate";
-    if (loan.status !== "requested" || loan.startDate >= todayUtc()) return "skipped";
+    if (loan.status !== "requested" || loan.startDate >= args.asOf) return "skipped";
     const now = Date.now();
     await ctx.db.insert("webhookReceipts", { idempotencyKey: args.idempotencyKey, kind: "request-expired", loanId, receivedAt: now });
     const patch: Partial<Doc<"loans">> = { status: "expired", updatedAt: now };
@@ -253,20 +258,46 @@ export const expireRequest = internalMutation({
   },
 });
 
+// counts stop at this cap so a runaway outbox cannot make the check expensive
+export const HEALTH_COUNT_CAP = 1000;
+
 export const deliveryHealth = internalQuery({
   args: {},
   handler: async (ctx) => {
     const stuckBefore = Date.now() - STUCK_AFTER_MS;
-    const dead = await ctx.db.query("outbox").withIndex("by_status", (q) => q.eq("status", "dead")).collect();
-    const pending = await ctx.db.query("outbox").withIndex("by_status", (q) => q.eq("status", "pending")).collect();
-    const stuck = pending.filter((r) => r.createdAt < stuckBefore);
+    const dead = () => ctx.db.query("outbox").withIndex("by_status_createdAt", (q) => q.eq("status", "dead"));
+    const stuck = () =>
+      ctx.db.query("outbox").withIndex("by_status_createdAt", (q) => q.eq("status", "pending").lt("createdAt", stuckBefore));
+    const [deadRows, stuckRows, oldestDead, oldestStuck] = await Promise.all([
+      dead().take(HEALTH_COUNT_CAP + 1),
+      stuck().take(HEALTH_COUNT_CAP + 1),
+      dead().order("asc").first(),
+      stuck().order("asc").first(),
+    ]);
+    const oldestAt = Math.min(oldestDead?.createdAt ?? Infinity, oldestStuck?.createdAt ?? Infinity);
+    let incidentRowId: string | null = null;
+    if (oldestAt !== Infinity) {
+      // rows sharing the oldest timestamp are tie-broken by id so the incident key is deterministic
+      const ties = await Promise.all([
+        ctx.db.query("outbox").withIndex("by_status_createdAt", (q) => q.eq("status", "dead").eq("createdAt", oldestAt)).take(100),
+        ctx.db.query("outbox").withIndex("by_status_createdAt", (q) => q.eq("status", "pending").eq("createdAt", oldestAt)).take(100),
+      ]);
+      incidentRowId = ties.flat().map((r) => r._id as string).sort()[0];
+    }
     return {
-      dead: dead.length,
-      stuckPending: stuck.length,
-      oldestStuckAt: stuck.length ? Math.min(...stuck.map((r) => r.createdAt)) : null,
-      rowIds: [...dead, ...stuck].map((r) => r._id as string).sort(),
+      dead: Math.min(deadRows.length, HEALTH_COUNT_CAP),
+      stuckPending: Math.min(stuckRows.length, HEALTH_COUNT_CAP),
+      countCapped: deadRows.length > HEALTH_COUNT_CAP || stuckRows.length > HEALTH_COUNT_CAP,
+      oldestStuckAt: oldestStuck?.createdAt ?? null,
+      incidentRowId,
     };
   },
+});
+
+export const healthAlertSeen = internalQuery({
+  args: { incidentKey: v.string() },
+  handler: async (ctx, args) =>
+    (await ctx.db.query("healthAlerts").withIndex("by_key", (q) => q.eq("incidentKey", args.incidentKey)).first()) !== null,
 });
 
 export const recordHealthAlert = internalMutation({

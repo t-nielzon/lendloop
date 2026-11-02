@@ -5,7 +5,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "**Delivery health monitor.** Every 15 minutes ask Convex how many notifications are dead or stuck in the outbox. When there is an incident that was not alerted yet (tracked by incident key in workflow static data, last 100 kept; manual test runs do not persist it), email the alert address, record the alert in Convex, and only then remember the key. A failed email or write-back ends the run with an error so the error workflow fires.",
+        "content": "**Delivery health monitor.** Every 15 minutes ask Convex how many notifications are dead or stuck in the outbox. When there is an incident that was not alerted yet (Convex says whether the incident key already has an alert, and workflow static data, last 100 kept, is a second guard that manual test runs do not persist), email the alert address, record the alert in Convex, and only then remember the key. A failed email or write-back ends the run with an error so the error workflow fires.",
         "width": 900,
         "height": 180
       },
@@ -93,7 +93,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const res = $input.first().json;\nconst key = res.incidentKey;\nif (!key) return [{ json: { shouldAlert: false, reason: 'healthy' } }];\nconst store = $getWorkflowStaticData('global');\nconst seen = Array.isArray(store.alertedIncidentKeys) ? store.alertedIncidentKeys : [];\nif (seen.includes(key)) return [{ json: { shouldAlert: false, reason: 'already alerted', incidentKey: key } }];\nreturn [{ json: { shouldAlert: true, incidentKey: key, dead: res.dead, stuckPending: res.stuckPending, oldestStuckAt: res.oldestStuckAt ?? null } }];"
+        "jsCode": "const res = $input.first().json;\nconst key = res.incidentKey;\nif (!key) return [{ json: { shouldAlert: false, reason: 'healthy' } }];\nif (res.alreadyAlerted === true) return [{ json: { shouldAlert: false, reason: 'already alerted in convex', incidentKey: key } }];\nconst store = $getWorkflowStaticData('global');\nconst seen = Array.isArray(store.alertedIncidentKeys) ? store.alertedIncidentKeys : [];\nif (seen.includes(key)) return [{ json: { shouldAlert: false, reason: 'already alerted', incidentKey: key } }];\nreturn [{ json: { shouldAlert: true, incidentKey: key, dead: res.dead, stuckPending: res.stuckPending, oldestStuckAt: res.oldestStuckAt ?? null } }];"
       },
       "id": "a5000005-0000-4000-8000-000000000006",
       "name": "Evaluate incident",

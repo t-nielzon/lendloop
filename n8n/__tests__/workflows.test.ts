@@ -105,7 +105,7 @@ describe("signing nodes", () => {
     expectVerifies(json, "/n8n/overdue-loans");
   });
 
-  it("signs the reminder-sent request with the contract idempotency key", async () => {
+  it("signs the reminder-sent request with the documented idempotency key", async () => {
     const loan = { loanId: "l9", asOf: "2026-11-03" };
     const { json } = await runCode(wf2, "Sign reminder-sent request", {
       $env: env,
@@ -319,13 +319,14 @@ describe("added signing nodes", () => {
     expect(health.json.headers["X-LendLoop-Signature"]).toBe(backendSign("inbound-secret", health.json.headers["X-LendLoop-Timestamp"], "{}"));
     await expect(runCode(wf6, "Sign delivery-health request", { $env: {} })).rejects.toThrow(/not set/);
   });
-  it("builds the contract idempotency keys", async () => {
+  it("builds the documented idempotency keys", async () => {
     const pickup = await runCode(wf4, "Sign pickup-reminder-sent request", loanCtx({ loanId: "l1", asOf: "2026-11-03" }));
     check(pickup.json, "/n8n/pickup-reminder-sent", "pickup-reminder:l1:2026-11-03");
     const nudge = await runCode(wf5, "Sign request-nudged request", loanCtx({ loanId: "l2" }));
     check(nudge.json, "/n8n/request-nudged", "request-nudge:l2");
-    const expire = await runCode(wf5, "Sign expire-request request", loanCtx({ loanId: "l3" }));
+    const expire = await runCode(wf5, "Sign expire-request request", loanCtx({ loanId: "l3", asOf: "2026-11-03" }));
     check(expire.json, "/n8n/expire-request", "request-expire:l3");
+    expect(JSON.parse(expire.json.body)).toEqual({ idempotencyKey: "request-expire:l3", loanId: "l3", asOf: "2026-11-03" });
     const inc = { incidentKey: "abc123", dead: 2, stuckPending: 1, oldestStuckAt: 1700000000000 };
     const health = await runCode(wf6, "Sign health-alert-sent request", loanCtx(inc));
     check(health.json, "/n8n/health-alert-sent", "health-alert:abc123");
@@ -404,6 +405,10 @@ describe("delivery health monitor", () => {
     expect(await evaluate({ incidentKey: "k1", dead: 1, stuckPending: 0 }, store)).toMatchObject({ shouldAlert: true, incidentKey: "k1" });
     store.alertedIncidentKeys = ["k1"];
     expect(await evaluate({ incidentKey: "k1", dead: 1, stuckPending: 0 }, store)).toMatchObject({ shouldAlert: false });
+  });
+  it("stops when convex reports the incident as already alerted, even with empty static data", async () => {
+    expect(await evaluate({ incidentKey: "k2", dead: 1, stuckPending: 0, alreadyAlerted: true }, {})).toMatchObject({ shouldAlert: false });
+    expect(await evaluate({ incidentKey: "k2", dead: 1, stuckPending: 0, alreadyAlerted: false }, {})).toMatchObject({ shouldAlert: true });
   });
   it("remembers at most the last 100 keys, after the write-back", async () => {
     const store: Record<string, unknown> = { alertedIncidentKeys: Array.from({ length: 100 }, (_, i) => `k${i}`) };

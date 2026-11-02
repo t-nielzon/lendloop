@@ -1,7 +1,7 @@
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction, type ActionCtx } from "./_generated/server";
-import { isValidDate } from "./lib/dates";
+import { diffDays, isValidDate, todayUtc } from "./lib/dates";
 import { verifyAny } from "./lib/signing";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -169,9 +169,11 @@ http.route({
   path: "/n8n/expire-request",
   method: "POST",
   handler: route(async (ctx, body) => {
-    const { idempotencyKey, loanId } = body;
-    if (!isStr(idempotencyKey) || !isStr(loanId)) return bad();
-    const result = await ctx.runMutation(internal.automation.expireRequest, { idempotencyKey, loanId });
+    const { idempotencyKey, loanId, asOf } = body;
+    if (!isStr(idempotencyKey) || !isStr(loanId) || !validDate(asOf)) return bad();
+    // a forged far-future date could expire every open request, so the date must stay near the server clock
+    if (Math.abs(diffDays(todayUtc(), asOf)) > 1) return bad();
+    const result = await ctx.runMutation(internal.automation.expireRequest, { idempotencyKey, loanId, asOf });
     if (result === "invalid") return bad();
     return json(200, { status: result });
   }),
@@ -181,10 +183,11 @@ http.route({
   path: "/n8n/delivery-health",
   method: "POST",
   handler: route(async (ctx) => {
-    const { dead, stuckPending, oldestStuckAt, rowIds } = await ctx.runQuery(internal.automation.deliveryHealth, {});
-    // the key is stable for the same set of failing rows so one incident alerts once
-    const incidentKey = dead + stuckPending === 0 ? null : await sha256Hex16(rowIds.join(","));
-    return json(200, { checkedAt: new Date().toISOString(), dead, stuckPending, oldestStuckAt, incidentKey });
+    const { dead, stuckPending, countCapped, oldestStuckAt, incidentRowId } = await ctx.runQuery(internal.automation.deliveryHealth, {});
+    // the key is the oldest problem row, so one outage keeps one key while more rows join it
+    const incidentKey = incidentRowId ? await sha256Hex16(incidentRowId) : null;
+    const alreadyAlerted = incidentKey ? await ctx.runQuery(internal.automation.healthAlertSeen, { incidentKey }) : false;
+    return json(200, { checkedAt: new Date().toISOString(), dead, stuckPending, countCapped, oldestStuckAt, incidentKey, alreadyAlerted });
   }),
 });
 

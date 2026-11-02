@@ -190,7 +190,7 @@ describe("expire request", () => {
   it("expires, notifies the borrower through the outbox and is idempotent", async () => {
     const w = await setupWorld();
     const loanId = await pastStartLoan(w);
-    const body = { idempotencyKey: `request-expire:${loanId}`, loanId };
+    const body = { idempotencyKey: `request-expire:${loanId}`, loanId, asOf: daysFromNow(0) };
     expect(await (await post(w, "/n8n/expire-request", body)).json()).toEqual({ status: "recorded" });
     expect(await (await post(w, "/n8n/expire-request", body)).json()).toEqual({ status: "duplicate" });
 
@@ -214,16 +214,31 @@ describe("expire request", () => {
     const w = await setupWorld();
     const decided = await pastStartLoan(w);
     await w.t.run((ctx) => ctx.db.patch(decided, { status: "declined" }));
-    expect(await (await post(w, "/n8n/expire-request", { idempotencyKey: `request-expire:${decided}`, loanId: decided })).json()).toEqual({ status: "skipped" });
+    expect(await (await post(w, "/n8n/expire-request", { idempotencyKey: `request-expire:${decided}`, loanId: decided, asOf: daysFromNow(0) })).json()).toEqual({ status: "skipped" });
     const future = await w.borrower.mutation(api.loans.request, { toolId: w.toolId, startDate: daysFromNow(5), endDate: daysFromNow(6) });
-    expect(await (await post(w, "/n8n/expire-request", { idempotencyKey: `request-expire:${future}`, loanId: future })).json()).toEqual({ status: "skipped" });
+    expect(await (await post(w, "/n8n/expire-request", { idempotencyKey: `request-expire:${future}`, loanId: future, asOf: daysFromNow(0) })).json()).toEqual({ status: "skipped" });
     expect((await w.t.run((ctx) => ctx.db.get(future)))?.status).toBe("requested");
+  });
+
+  it("compares against the supplied date and rejects a missing or far-off one", async () => {
+    const w = await setupWorld();
+    const loanId = await pastStartLoan(w);
+    const base = { idempotencyKey: `request-expire:${loanId}`, loanId };
+    expect((await post(w, "/n8n/expire-request", base)).status).toBe(400);
+    expect((await post(w, "/n8n/expire-request", { ...base, asOf: "nope" })).status).toBe(400);
+    expect((await post(w, "/n8n/expire-request", { ...base, asOf: daysFromNow(2) })).status).toBe(400);
+    expect((await post(w, "/n8n/expire-request", { ...base, asOf: daysFromNow(-2) })).status).toBe(400);
+    expect((await w.t.run((ctx) => ctx.db.get(loanId)))?.status).toBe("requested");
+    // a start date equal to the supplied date has not passed yet
+    await w.t.run((ctx) => ctx.db.patch(loanId, { startDate: daysFromNow(1) }));
+    expect(await (await post(w, "/n8n/expire-request", { ...base, asOf: daysFromNow(1) })).json()).toEqual({ status: "skipped" });
+    expect(await (await post(w, "/n8n/expire-request", { ...base, asOf: daysFromNow(1) })).json()).toEqual({ status: "skipped" });
   });
 
   it("cannot be triggered by users and expired loans cannot move on", async () => {
     const w = await setupWorld();
     const loanId = await pastStartLoan(w);
-    await w.t.mutation(internal.automation.expireRequest, { idempotencyKey: `request-expire:${loanId}`, loanId });
+    await w.t.mutation(internal.automation.expireRequest, { idempotencyKey: `request-expire:${loanId}`, loanId, asOf: daysFromNow(0) });
     for (const [who, fn] of [
       [w.owner, api.loans.approve],
       [w.owner, api.loans.decline],
@@ -243,26 +258,62 @@ describe("delivery health", () => {
     );
   }
 
-  it("is null when healthy and stable for the same rows", async () => {
+  it("keys the incident on its oldest problem row and ends it on recovery", async () => {
     const w = await setupWorld();
     const loanId = await requestedLoan(w);
     await w.t.finishAllScheduledFunctions(vi.runAllTimers);
-    const healthy = await (await post(w, "/n8n/delivery-health", {})).json();
-    expect(healthy).toMatchObject({ dead: 0, stuckPending: 0, incidentKey: null });
+    const health = async () => await (await post(w, "/n8n/delivery-health", {})).json();
+    const healthy = await health();
+    expect(healthy).toMatchObject({ dead: 0, stuckPending: 0, incidentKey: null, alreadyAlerted: false, countCapped: false });
     expect(typeof healthy.checkedAt).toBe("string");
 
-    await addOutbox(w, "dead", Date.now(), loanId);
-    const stuckId = await addOutbox(w, "pending", Date.now() - 31 * HOUR / 60, loanId);
+    const oldest = await addOutbox(w, "pending", Date.now() - 45 * HOUR / 60, loanId);
     await addOutbox(w, "pending", Date.now(), loanId);
-    const a = await (await post(w, "/n8n/delivery-health", {})).json();
-    const b = await (await post(w, "/n8n/delivery-health", {})).json();
-    expect(a).toMatchObject({ dead: 1, stuckPending: 1 });
+    const a = await health();
+    expect(a).toMatchObject({ dead: 0, stuckPending: 1 });
     expect(a.incidentKey).toMatch(/^[0-9a-f]{16}$/);
-    expect(a.incidentKey).toBe(b.incidentKey);
-    expect(a.oldestStuckAt).toBe((await w.t.run((ctx) => ctx.db.get(stuckId)))?.createdAt);
+    expect(a.oldestStuckAt).toBe((await w.t.run((ctx) => ctx.db.get(oldest)))?.createdAt);
 
     await addOutbox(w, "dead", Date.now(), loanId);
-    expect((await (await post(w, "/n8n/delivery-health", {})).json()).incidentKey).not.toBe(a.incidentKey);
+    await addOutbox(w, "pending", Date.now() - 35 * HOUR / 60, loanId);
+    const b = await health();
+    expect(b).toMatchObject({ dead: 1, stuckPending: 2 });
+    expect(b.incidentKey).toBe(a.incidentKey);
+
+    await w.t.run(async (ctx) => {
+      for (const r of await ctx.db.query("outbox").collect()) await ctx.db.delete(r._id);
+    });
+    expect((await health()).incidentKey).toBeNull();
+    await addOutbox(w, "dead", Date.now(), loanId);
+    const c = await health();
+    expect(c.incidentKey).toMatch(/^[0-9a-f]{16}$/);
+    expect(c.incidentKey).not.toBe(a.incidentKey);
+  });
+
+  it("reports whether the incident was already alerted", async () => {
+    const w = await setupWorld();
+    const loanId = await requestedLoan(w);
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    await addOutbox(w, "dead", Date.now(), loanId);
+    const first = await (await post(w, "/n8n/delivery-health", {})).json();
+    expect(first.alreadyAlerted).toBe(false);
+    const key = first.incidentKey;
+    await post(w, "/n8n/health-alert-sent", { idempotencyKey: `health-alert:${key}`, incidentKey: key, dead: 1, stuckPending: 0 });
+    await addOutbox(w, "dead", Date.now(), loanId);
+    expect(await (await post(w, "/n8n/delivery-health", {})).json()).toMatchObject({ incidentKey: key, alreadyAlerted: true });
+  });
+
+  it("caps counts and flags it", async () => {
+    const w = await setupWorld();
+    const loanId = await requestedLoan(w);
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    await w.t.run(async (ctx) => {
+      const at = Date.now();
+      for (let i = 0; i < 1001; i++) {
+        await ctx.db.insert("outbox", { eventId: `e${i}`, loanId, payload: {}, status: "dead", attempts: 0, nextAttemptAt: at, createdAt: at });
+      }
+    });
+    expect(await (await post(w, "/n8n/delivery-health", {})).json()).toMatchObject({ dead: 1000, countCapped: true });
   });
 
   it("records a health alert once per incident and lists it for admins", async () => {
@@ -310,6 +361,20 @@ describe("last automation", () => {
     expect((await w.owner.query(api.loans.listIncoming, {}))[0].lastAutomation).not.toBeNull();
     expect((await w.root.query(api.loans.listAll, {}))[0].lastAutomation).not.toBeNull();
     expect((await w.borrower.query(api.loans.get, { loanId }))?.lastAutomation).toMatchObject({ type: "reminder_sent" });
+  });
+
+  it("skips a nudge for a loan that is no longer requested without writing", async () => {
+    const w = await setupWorld();
+    const loanId = await requestedLoan(w);
+    await w.t.run((ctx) => ctx.db.patch(loanId, { status: "declined" }));
+    const before = (await events(w, loanId)).length;
+    const res = await (await post(w, "/n8n/request-nudged", { idempotencyKey: `request-nudge:${loanId}`, loanId })).json();
+    expect(res).toEqual({ status: "skipped" });
+    expect((await events(w, loanId)).length).toBe(before);
+    const loan = await w.t.run((ctx) => ctx.db.get(loanId));
+    expect(loan?.nudgedAt).toBeUndefined();
+    const receipts = await w.t.run((ctx) => ctx.db.query("webhookReceipts").collect());
+    expect(receipts.some((r) => r.idempotencyKey === `request-nudge:${loanId}`)).toBe(false);
   });
 
   it("covers nudge and null for loans without automation", async () => {
