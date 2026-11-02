@@ -38,7 +38,7 @@ Features:
 
 ## Hosted demo
 
-https://lendloop.nielzontolentino.com (being set up) runs the app on Netlify with a Convex cloud deployment and a Clerk development instance. n8n is not hosted there, so status notifications queue in the outbox and show as pending in the admin console. The full automation path (emails, reminders, follow-ups, health alerts) runs in the local docker-compose stack described below.
+https://lendloop.nielzontolentino.com runs the app on Netlify with a Convex cloud deployment and a Clerk development instance. n8n is not hosted there, so status notifications queue in the outbox and show as pending in the admin console. The full automation path (emails, reminders, follow-ups, health alerts) runs in the local docker-compose stack described below.
 
 ## Quick start
 
