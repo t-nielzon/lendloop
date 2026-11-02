@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { invalid } from "./lib/errors";
+import { isAutomationEvent } from "./lib/loanEvents";
 
 // dev-only helpers: internal functions are unreachable from clients, so they can only be run through the cli
 
@@ -148,6 +149,8 @@ const SEED_LOANS: SeedLoan[] = [
   { tool: "tilecutter", borrower: "tom", start: 6, end: 9, status: "approved", note: "Retiling the bathroom floor.", requestedHoursAgo: 55 },
   { tool: "sockets", borrower: "aiko", start: 3, end: 5, status: "approved", requestedHoursAgo: 48 },
   { tool: "kayak", borrower: "priya", start: 14, end: 16, status: "approved", requestedHoursAgo: 90 },
+  // approved and starting tomorrow, a pickup reminder candidate
+  { tool: "mixer", borrower: "grace", start: 1, end: 2, status: "approved", note: "Cake for the school fair.", requestedHoursAgo: 52 },
   // approved and overdue, with reminders sent
   { tool: "ladder", borrower: "samuel", start: -9, end: -3, status: "approved", note: "Painting the back fence.", reminders: [-1, 0] },
   { tool: "wheelbarrow", borrower: "maya", start: -6, end: -2, status: "approved", reminders: [-1] },
@@ -161,6 +164,8 @@ const SEED_LOANS: SeedLoan[] = [
   { tool: "cooker", borrower: "omar", start: -5, end: -3, status: "returned", note: "Slow-cooked stew for the whole family." },
   { tool: "clamps", borrower: "tom", start: -25, end: -22, status: "returned" },
   { tool: "stripper", borrower: "omar", start: -40, end: -37, status: "returned" },
+  // expired: the start date passed with no decision
+  { tool: "pressure", borrower: "tom", start: -3, end: -2, status: "expired", requestedHoursAgo: 120 },
   // declined and cancelled
   { tool: "circsaw", borrower: "omar", start: -4, end: -2, status: "declined", reason: "Sorry, I needed it myself that week." },
   { tool: "mower", borrower: "priya", start: 10, end: 11, status: "declined", reason: "I'm away that weekend, sorry!" },
@@ -206,6 +211,11 @@ function buildLoan(l: SeedLoan, now: number, dayStart: number, ownerId: Id<"user
     loan.decidedAt = decidedAt;
     loan.updatedAt = decidedAt;
   }
+  if (l.status === "expired") {
+    const expiredAt = Math.min(startMs + 10 * HOUR_MS, now - 60_000);
+    events.push({ at: expiredAt, actorType: "automation", type: "expired", detail: "no decision before the start date" }, delivered(expiredAt));
+    loan.updatedAt = expiredAt;
+  }
   if (l.status === "cancelled") {
     events.push({ at: decidedAt, actorType: "user", actorId: borrowerId, type: "cancelled" }, delivered(decidedAt));
     loan.updatedAt = decidedAt;
@@ -226,6 +236,12 @@ function buildLoan(l: SeedLoan, now: number, dayStart: number, ownerId: Id<"user
     loan.updatedAt = events[events.length - 1].at;
   }
   events.sort((a, b) => a.at - b.at);
+  // mirrors what the mutations denormalize so the seeded list rows show the same latest automation line
+  const latest = events.filter((e) => isAutomationEvent(e.type)).at(-1);
+  if (latest) {
+    loan.lastAutomationAt = latest.at;
+    loan.lastAutomationType = latest.type;
+  }
   return { loan, events };
 }
 

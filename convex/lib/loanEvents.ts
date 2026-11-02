@@ -12,6 +12,8 @@ const AUTOMATION_EVENTS: ReadonlySet<EventType> = new Set<EventType>([
   "expired",
 ]);
 
+export const isAutomationEvent = (type: EventType) => AUTOMATION_EVENTS.has(type);
+
 export type LoanEventInput = {
   loanId: Id<"loans">;
   at: number;
@@ -24,7 +26,7 @@ export type LoanEventInput = {
 // the single insertion path for loan events so the denormalized automation fields on the loan can never drift
 export async function insertLoanEvent(ctx: MutationCtx, event: LoanEventInput) {
   await ctx.db.insert("loanEvents", event);
-  if (AUTOMATION_EVENTS.has(event.type)) {
+  if (isAutomationEvent(event.type)) {
     await ctx.db.patch(event.loanId, { lastAutomationAt: event.at, lastAutomationType: event.type });
   }
 }

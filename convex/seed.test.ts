@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { internal } from "./_generated/api";
+import { isAutomationEvent } from "./lib/loanEvents";
 import { setupWorld } from "./test.helpers";
 
 beforeEach(() => vi.useFakeTimers());
@@ -56,7 +57,7 @@ describe("demo seed", () => {
     }));
     expect(data.outbox).toHaveLength(0);
     const statuses = new Set(data.loans.map((l) => l.status));
-    expect(statuses).toEqual(new Set(["requested", "approved", "declined", "cancelled", "returned"]));
+    expect(statuses).toEqual(new Set(["requested", "approved", "declined", "cancelled", "returned", "expired"]));
 
     const approved = data.loans.filter((l) => l.status === "approved");
     for (const a of approved) {
@@ -67,7 +68,16 @@ describe("demo seed", () => {
     }
     expect(approved.some((l) => l.reminderCount > 0 && l.lastReminderOn)).toBe(true);
 
+    expect(data.loans.filter((l) => l.status === "expired")).toHaveLength(1);
+    const tomorrow = new Date(now + 86_400_000).toISOString().slice(0, 10);
+    expect(approved.some((l) => l.startDate === tomorrow && !l.pickupReminderOn)).toBe(true);
+    const stale = data.loans.filter((l) => l.status === "requested" && l.createdAt <= now - 48 * 3_600_000 && !l.nudgedAt);
+    expect(stale.length).toBeGreaterThan(0);
+
     for (const loan of data.loans) {
+      const automation = data.events.filter((e) => e.loanId === loan._id && isAutomationEvent(e.type)).sort((x, y) => x.at - y.at);
+      expect(loan.lastAutomationAt).toBe(automation.at(-1)?.at);
+      expect(loan.lastAutomationType).toBe(automation.at(-1)?.type);
       const events = data.events.filter((e) => e.loanId === loan._id).sort((x, y) => x._creationTime - y._creationTime);
       expect(events[0].type).toBe("requested");
       expect(events[0].actorId).toBe(loan.borrowerId);
