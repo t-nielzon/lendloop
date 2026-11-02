@@ -100,7 +100,19 @@ Open http://localhost:3000.
 
 ### 5. Seed data
 
-If `convex/seed.ts` is present in your checkout, run it against the local deployment (see the header comment of that file for the function name and arguments). Otherwise sign up two users and add a tool from the UI; the catalog is empty until a tool exists.
+Load five demo tools owned by a placeholder member:
+
+```bash
+npx convex run seed:demoTools
+```
+
+These are internal functions, so they can only be run through the CLI. To try the overdue reminder, approve a loan in the UI, then move its end date into the past (use the loan id from its page):
+
+```bash
+npx convex run seed:backdateLoan '{"loanId": "<loan id>", "endDate": "2026-01-01"}'
+```
+
+Then run "Execute workflow" on the daily reminders workflow in n8n and check Mailpit and the loan timeline.
 
 ### Test users and becoming admin
 
@@ -252,7 +264,7 @@ Trigger manually:
 # status webhook: prints a signed curl command for a sample payload
 node scripts/sign-request.mjs "$LENDLOOP_OUTBOUND_SECRET" http://localhost:5678/webhook/lendloop/loan-status | sh
 
-# overdue reminders: open the workflow in the n8n UI and use "Execute workflow"
+# overdue reminders: back-date an approved loan (see Seed data), then open the workflow in the n8n UI and use "Execute workflow"
 ```
 
 A second run of the sample curl with the same `eventId` returns `{"status":"duplicate"}`. Pass your own body as the third argument, or `--timestamp <unix-seconds>` with an old value to see the 401 for a stale request.
