@@ -57,7 +57,7 @@ export function RequestForm({
         Request this tool
       </h2>
       {isMine ? (
-        <p className="text-sm text-muted-foreground">This is your tool, so you can't request it.</p>
+        <p className="text-sm text-muted-foreground">This is your tool, so you can&apos;t request it.</p>
       ) : null}
       {!isAuthenticated ? (
         <p className="text-sm text-muted-foreground">Sign in to request this tool.</p>

@@ -26,9 +26,9 @@ function Loaded({ toolId }: { toolId: Id<"tools"> }) {
   const { pending, run } = useAction();
 
   if (tool === undefined) return <ListSkeleton rows={2} />;
-  if (tool === null) return <ErrorState message="This tool doesn't exist." />;
+  if (tool === null) return <ErrorState message="This tool doesn&apos;t exist." />;
   if (!tool.canManage) return <ForbiddenState message="Only the owner can edit this tool." />;
-  if (tool.status === "archived") return <ErrorState message="Archived tools can't be edited." />;
+  if (tool.status === "archived") return <ErrorState message="Archived tools can&apos;t be edited." />;
 
   async function onArchive() {
     const done = await run(() => archive({ toolId }), "Tool archived.");
@@ -52,7 +52,7 @@ function Loaded({ toolId }: { toolId: Id<"tools"> }) {
       <div className="max-w-xl rounded-lg border p-4">
         <h2 className="font-medium">Archive this tool</h2>
         <p className="mb-3 text-sm text-muted-foreground">
-          Archived tools disappear from the catalog and can't be requested.
+          Archived tools disappear from the catalog and can&apos;t be requested.
         </p>
         <ConfirmDialog
           trigger={
