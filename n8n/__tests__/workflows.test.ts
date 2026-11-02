@@ -140,6 +140,13 @@ describe("workflow structure", () => {
       }
     }
   });
+  it("turns off the n8n attribution footer on every email node", () => {
+    for (const w of [wf1, wf2, wf3]) {
+      for (const n of w.nodes.filter((n) => n.type.includes("emailSend"))) {
+        expect((n.parameters.options as { appendAttribution?: boolean } | undefined)?.appendAttribution).toBe(false);
+      }
+    }
+  });
   it("reads the raw body on the webhook path", () => {
     const hook = wf1.nodes.find((n) => n.type.endsWith("webhook"))!;
     expect(hook.parameters).toMatchObject({ path: "lendloop/loan-status", options: { rawBody: true } });

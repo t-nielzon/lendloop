@@ -111,7 +111,9 @@
         "subject": "=Reminder: {{ $json.toolName }} was due back {{ $json.endDate }}",
         "emailFormat": "text",
         "text": "=Hi {{ $json.borrowerFirstName }},\n\n{{ $json.toolName }} was due back on {{ $json.endDate }} and is now {{ $json.daysOverdue }} day(s) overdue. Please return it to the owner as soon as you can.\n\nLendLoop",
-        "options": {}
+        "options": {
+          "appendAttribution": false
+        }
       },
       "id": "a2000002-0000-4000-8000-000000000006",
       "name": "Send reminder email",

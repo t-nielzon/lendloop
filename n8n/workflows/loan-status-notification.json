@@ -188,7 +188,9 @@
         "subject": "={{ $json.subject }}",
         "emailFormat": "text",
         "text": "={{ $json.text }}",
-        "options": {}
+        "options": {
+          "appendAttribution": false
+        }
       },
       "id": "a1000001-0000-4000-8000-000000000010",
       "name": "Send notification email",

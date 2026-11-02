@@ -50,7 +50,9 @@
         "subject": "={{ $('Build alert').first().json.subject }}",
         "emailFormat": "text",
         "text": "={{ $('Build alert').first().json.text }}",
-        "options": {}
+        "options": {
+          "appendAttribution": false
+        }
       },
       "id": "a3000003-0000-4000-8000-000000000004",
       "name": "Email alert",
