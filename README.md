@@ -147,7 +147,7 @@ Admin is never granted from the client. To become admin, put your address in `AD
 
 ### Troubleshooting
 
-- If `next dev` crashes with "OS file watch limit reached", run `pnpm build && pnpm start` instead. The Convex CLI may need `CHOKIDAR_USEPOLLING=1`.
+- If `next dev` crashes with "OS file watch limit reached", run `pnpm build && pnpm start` instead. The Convex CLI may need `CHOKIDAR_USEPOLLING=1`. After another `pnpm build`, restart `pnpm start` so it serves the new chunks.
 - Outbox rows stay pending with "webhook url not configured" or "outbound secret not configured": the Convex env variables from step 3 are missing. Set them; the next sweep picks the rows up. No attempt is consumed while config is missing.
 - Webhook answers 401: the secret in the n8n container differs from the one in Convex, or the clocks differ by more than 5 minutes.
 - After editing a workflow JSON, run `docker compose run --rm n8n-import && docker compose restart n8n`; activation only takes effect on restart.
@@ -266,7 +266,7 @@ Exported JSON lives in `n8n/workflows/` with fixed ids, so re-importing updates 
 | Delivery health monitor | Schedule every 15 minutes, plus manual | Calls `/n8n/delivery-health`; when dead or stuck notifications exist and the incident was not alerted yet, emails `LENDLOOP_ALERT_EMAIL` | `/n8n/health-alert-sent`, key `health-alert:<incidentKey>`; the incident key is remembered in static data (last 100) only after the write-back | A failed email or write-back fails the run |
 | Error handler | Error trigger | Reports the failure to `/n8n/workflow-error`, then emails `LENDLOOP_ALERT_EMAIL` | `workflow-error:<executionId>` | Its two steps retry 3 times and continue on error |
 
-All five other workflows name the error handler as their error workflow.
+All five other workflows name the error handler as their error workflow. The loan status notification is the one exception in practice: it catches its own email failure and answers 500, so the failure stays with the Convex outbox (retries, then dead letter) and the delivery health monitor alerts on it, rather than firing the error handler.
 
 Reliability:
 
