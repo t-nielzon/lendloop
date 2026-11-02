@@ -23,3 +23,14 @@ jobs:
       - run: pnpm build
         env:
           NEXT_PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
+
+  n8n-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # generated secrets, n8n + import job + mailpit only (no convex); the script prints n8n logs on failure and tears down
+      - run: scripts/n8n-smoke.sh

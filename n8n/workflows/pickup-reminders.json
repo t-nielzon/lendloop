@@ -1,0 +1,511 @@
+{
+  "id": "lendloopPickup00001",
+  "name": "LendLoop - Pickup reminders",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "**Pickup reminders.** Every morning at 08:00 (instance timezone) ask Convex which approved loans start tomorrow. Each loan is handled on its own: one email to the borrower, one to the owner, and only when both went out an immediate write-back so Convex does not remind again today. A failed address is recorded and skipped, never blocking the others. Convex returns at most 200 loans per call and excludes already-reminded ones, so when more remain the workflow fetches again (up to 10 pages). If anything failed, the run ends with one summarized error so the error workflow fires. Use Run manually to test.",
+        "width": 900,
+        "height": 180
+      },
+      "id": "a3000003-0000-4000-8000-000000000001",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "a3000003-0000-4000-8000-000000000002",
+      "name": "Every day at 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        100
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "a3000003-0000-4000-8000-000000000003",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\nconst sign = (secret, timestamp, body) =>\n  'v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\nconst signedRequest = (path, bodyObject) => {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const base = String($env.LENDLOOP_CONVEX_SITE_URL || 'http://convex-backend:3211').replace(/\\/+$/, '');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const body = JSON.stringify(bodyObject);\n  return {\n    url: base + path,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-LendLoop-Timestamp': timestamp,\n      'X-LendLoop-Signature': sign(secret, timestamp, body),\n      'X-LendLoop-Event-Id': bodyObject.idempotencyKey || ''\n    }\n  };\n};\nconst asOf = new Date().toLocaleDateString('en-CA', { timeZone: $env.GENERIC_TIMEZONE || 'UTC' });\nreturn [{ json: { asOf, ...signedRequest('/n8n/upcoming-pickups', { asOf }) } }];"
+      },
+      "id": "a3000003-0000-4000-8000-000000000004",
+      "name": "Sign upcoming-pickups request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a3000003-0000-4000-8000-000000000005",
+      "name": "Fetch upcoming pickups",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const res = $input.first().json;\nconst asOf = res.asOf || $('Sign upcoming-pickups request').last().json.asOf;\nreturn (res.loans || []).map((loan) => ({ json: { ...loan, asOf } }));"
+      },
+      "id": "a3000003-0000-4000-8000-000000000006",
+      "name": "Split pickups",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": "={{ $prevNode.name === 'Split pickups' }}"
+        }
+      },
+      "id": "a3000003-0000-4000-8000-000000000007",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "LendLoop <noreply@lendloop.local>",
+        "toEmail": "={{ $json.borrowerEmail }}",
+        "subject": "=Pickup tomorrow: {{ $json.toolName }}",
+        "emailFormat": "text",
+        "text": "=Hi {{ $json.borrowerFirstName }},\n\nA quick reminder that you are picking up {{ $json.toolName }} from {{ $json.ownerFirstName }} tomorrow, {{ $json.startDate }}. It is due back on {{ $json.endDate }}.\n\nLendLoop",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "a3000003-0000-4000-8000-000000000008",
+      "name": "Email borrower",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1100,
+        100
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lendloopSmtpMailpit",
+          "name": "LendLoop Mailpit SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "LendLoop <noreply@lendloop.local>",
+        "toEmail": "={{ $('Loop Over Items').first().json.ownerEmail }}",
+        "subject": "=Pickup tomorrow: {{ $('Loop Over Items').first().json.toolName }}",
+        "emailFormat": "text",
+        "text": "=Hi {{ $('Loop Over Items').first().json.ownerFirstName }},\n\nA quick reminder that {{ $('Loop Over Items').first().json.borrowerFirstName }} is picking up {{ $('Loop Over Items').first().json.toolName }} tomorrow, {{ $('Loop Over Items').first().json.startDate }}. It is due back on {{ $('Loop Over Items').first().json.endDate }}.\n\nLendLoop",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "a3000003-0000-4000-8000-000000000009",
+      "name": "Email owner",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        100
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lendloopSmtpMailpit",
+          "name": "LendLoop Mailpit SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const crypto = require('crypto');\nconst sign = (secret, timestamp, body) =>\n  'v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\nconst signedRequest = (path, bodyObject) => {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const base = String($env.LENDLOOP_CONVEX_SITE_URL || 'http://convex-backend:3211').replace(/\\/+$/, '');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const body = JSON.stringify(bodyObject);\n  return {\n    url: base + path,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-LendLoop-Timestamp': timestamp,\n      'X-LendLoop-Signature': sign(secret, timestamp, body),\n      'X-LendLoop-Event-Id': bodyObject.idempotencyKey || ''\n    }\n  };\n};\nconst loan = $('Loop Over Items').first().json;\nconst idempotencyKey = 'pickup-reminder:' + loan.loanId + ':' + loan.asOf;\nreturn { json: signedRequest('/n8n/pickup-reminder-sent', { idempotencyKey, loanId: loan.loanId, asOf: loan.asOf }) };"
+      },
+      "id": "a3000003-0000-4000-8000-000000000010",
+      "name": "Sign pickup-reminder-sent request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a3000003-0000-4000-8000-000000000011",
+      "name": "Record pickup reminder in Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const loan = $('Loop Over Items').first().json;\nreturn { json: { ok: true, loanId: loan.loanId } };"
+      },
+      "id": "a3000003-0000-4000-8000-000000000012",
+      "name": "Mark sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const loan = $('Loop Over Items').first().json;\nconst err = $json.error;\nconst error = String((typeof err === 'string' ? err : err && err.message) || 'send or write-back failed').slice(0, 200);\nreturn { json: { ok: false, loanId: loan.loanId, error } };"
+      },
+      "id": "a3000003-0000-4000-8000-000000000013",
+      "name": "Mark failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const MAX_PAGES = 10;\nconst results = $input.all().map((i) => i.json);\nconst failed = results.filter((r) => r.ok === false);\nconst store = $getWorkflowStaticData('node');\nif ($runIndex === 0 || !Array.isArray(store.failures)) store.failures = [];\nstore.failures.push(...failed.map((f) => ({ loanId: f.loanId, error: f.error })));\nconst hasMore = $('Fetch upcoming pickups').last().json.hasMore === true;\n// only page on while something was actually processed, otherwise the same failing loans fill every page\nconst canContinue = hasMore && results.length > failed.length && $runIndex < MAX_PAGES - 1;\nreturn [{ json: { page: $runIndex + 1, hasMore, canContinue, failedTotal: store.failures.length, failures: store.failures.slice(0, 20) } }];"
+      },
+      "id": "a3000003-0000-4000-8000-000000000014",
+      "name": "Summarize page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a3000003-0000-4000-8000-900000000014",
+              "leftValue": "={{ $json.canContinue }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3000003-0000-4000-8000-000000000015",
+      "name": "More pages?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s = $input.first().json;\nif (s.failedTotal > 0 || s.hasMore) {\n  const list = s.failures.map((f) => f.loanId + ': ' + f.error).join('; ');\n  throw new Error('pickup reminders incomplete: ' + s.failedTotal + ' failed' + (s.hasMore ? ', more items remain' : '') + (list ? ' (' + list + ')' : ''));\n}\nreturn [{ json: s }];"
+      },
+      "id": "a3000003-0000-4000-8000-000000000016",
+      "name": "Fail if any failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Every day at 08:00": {
+      "main": [
+        [
+          {
+            "node": "Sign upcoming-pickups request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Sign upcoming-pickups request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Summarize page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email borrower",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email borrower": {
+      "main": [
+        [
+          {
+            "node": "Email owner",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email owner": {
+      "main": [
+        [
+          {
+            "node": "Sign pickup-reminder-sent request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign pickup-reminder-sent request": {
+      "main": [
+        [
+          {
+            "node": "Record pickup reminder in Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record pickup reminder in Convex": {
+      "main": [
+        [
+          {
+            "node": "Mark sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark sent": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark failed": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign upcoming-pickups request": {
+      "main": [
+        [
+          {
+            "node": "Fetch upcoming pickups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch upcoming pickups": {
+      "main": [
+        [
+          {
+            "node": "Split pickups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split pickups": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize page": {
+      "main": [
+        [
+          {
+            "node": "More pages?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "More pages?": {
+      "main": [
+        [
+          {
+            "node": "Sign upcoming-pickups request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail if any failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "lendloopErrHandler1"
+  }
+}

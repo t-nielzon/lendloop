@@ -38,8 +38,8 @@ services:
   mailpit:
     image: axllent/mailpit:v1
     ports:
-      - "127.0.0.1:8025:8025"
-      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:${MAILPIT_HTTP_PORT:-8025}:8025"
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
     healthcheck:
       test: ["CMD", "/mailpit", "readyz"]
       interval: 5s
@@ -58,6 +58,9 @@ services:
       TZ: ${GENERIC_TIMEZONE:-UTC}
       LENDLOOP_OUTBOUND_SECRET: ${LENDLOOP_OUTBOUND_SECRET}
       LENDLOOP_INBOUND_SECRET: ${LENDLOOP_INBOUND_SECRET}
+      # only set while rotating a secret; empty means no previous secret
+      LENDLOOP_OUTBOUND_SECRET_PREVIOUS: ${LENDLOOP_OUTBOUND_SECRET_PREVIOUS:-}
+      LENDLOOP_INBOUND_SECRET_PREVIOUS: ${LENDLOOP_INBOUND_SECRET_PREVIOUS:-}
       LENDLOOP_CONVEX_SITE_URL: ${LENDLOOP_CONVEX_SITE_URL:-http://convex-backend:3211}
       LENDLOOP_ALERT_EMAIL: ${LENDLOOP_ALERT_EMAIL:-alerts@example.com}
       # code nodes need crypto and $env; task runners read the same variables
@@ -74,7 +77,7 @@ services:
   n8n:
     image: *n8n-image
     ports:
-      - "127.0.0.1:5678:5678"
+      - "127.0.0.1:${N8N_HOST_PORT:-5678}:5678"
     environment:
       <<: *n8n-env
       N8N_HOST: localhost

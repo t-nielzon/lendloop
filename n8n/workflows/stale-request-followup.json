@@ -1,0 +1,586 @@
+{
+  "id": "lendloopStale000001",
+  "name": "LendLoop - Stale request follow-up",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "**Stale request follow-up.** Every day at 10:00 (instance timezone) ask Convex for requests that are still undecided. Requests older than 48 hours get one email to the owner (a nudge, written back right after the send). Requests whose start date has passed are expired through Convex, which notifies the borrower itself; this workflow never emails for expiry, and a skipped answer means the owner decided first, which counts as success. Convex returns at most 200 items per call, so when more remain the workflow fetches again (up to 10 pages). If anything failed, the run ends with one summarized error so the error workflow fires. Use Run manually to test.",
+        "width": 900,
+        "height": 200
+      },
+      "id": "a4000004-0000-4000-8000-000000000001",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        }
+      },
+      "id": "a4000004-0000-4000-8000-000000000002",
+      "name": "Every day at 10:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        100
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "a4000004-0000-4000-8000-000000000003",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\nconst sign = (secret, timestamp, body) =>\n  'v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\nconst signedRequest = (path, bodyObject) => {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const base = String($env.LENDLOOP_CONVEX_SITE_URL || 'http://convex-backend:3211').replace(/\\/+$/, '');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const body = JSON.stringify(bodyObject);\n  return {\n    url: base + path,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-LendLoop-Timestamp': timestamp,\n      'X-LendLoop-Signature': sign(secret, timestamp, body),\n      'X-LendLoop-Event-Id': bodyObject.idempotencyKey || ''\n    }\n  };\n};\nconst asOf = new Date().toLocaleDateString('en-CA', { timeZone: $env.GENERIC_TIMEZONE || 'UTC' });\nreturn [{ json: { asOf, ...signedRequest('/n8n/stale-requests', { asOf }) } }];"
+      },
+      "id": "a4000004-0000-4000-8000-000000000004",
+      "name": "Sign stale-requests request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a4000004-0000-4000-8000-000000000005",
+      "name": "Fetch stale requests",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const res = $input.first().json;\nconst asOf = res.asOf || $('Sign stale-requests request').last().json.asOf;\nconst nudges = (res.toNudge || []).map((l) => ({ json: { ...l, kind: 'nudge', asOf } }));\nconst expiries = (res.toExpire || []).map((l) => ({ json: { ...l, kind: 'expire', asOf } }));\nreturn [...nudges, ...expiries];"
+      },
+      "id": "a4000004-0000-4000-8000-000000000006",
+      "name": "Split stale requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": "={{ $prevNode.name === 'Split stale requests' }}"
+        }
+      },
+      "id": "a4000004-0000-4000-8000-000000000007",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a4000004-0000-4000-8000-900000000007",
+              "leftValue": "={{ $json.kind === 'nudge' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a4000004-0000-4000-8000-000000000008",
+      "name": "Needs nudge?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "LendLoop <noreply@lendloop.local>",
+        "toEmail": "={{ $json.ownerEmail }}",
+        "subject": "=Request waiting for your decision: {{ $json.toolName }}",
+        "emailFormat": "text",
+        "text": "=Hi {{ $json.ownerFirstName }},\n\n{{ $json.borrowerFirstName }} asked to borrow {{ $json.toolName }} ({{ $json.startDate }} to {{ $json.endDate }}) and is still waiting for your decision. Please approve or decline when you can.\n\nLendLoop",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "a4000004-0000-4000-8000-000000000009",
+      "name": "Email owner about waiting request",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        100
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lendloopSmtpMailpit",
+          "name": "LendLoop Mailpit SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const crypto = require('crypto');\nconst sign = (secret, timestamp, body) =>\n  'v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\nconst signedRequest = (path, bodyObject) => {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const base = String($env.LENDLOOP_CONVEX_SITE_URL || 'http://convex-backend:3211').replace(/\\/+$/, '');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const body = JSON.stringify(bodyObject);\n  return {\n    url: base + path,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-LendLoop-Timestamp': timestamp,\n      'X-LendLoop-Signature': sign(secret, timestamp, body),\n      'X-LendLoop-Event-Id': bodyObject.idempotencyKey || ''\n    }\n  };\n};\nconst loan = $('Loop Over Items').first().json;\nconst idempotencyKey = 'request-nudge:' + loan.loanId;\nreturn { json: signedRequest('/n8n/request-nudged', { idempotencyKey, loanId: loan.loanId }) };"
+      },
+      "id": "a4000004-0000-4000-8000-000000000010",
+      "name": "Sign request-nudged request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a4000004-0000-4000-8000-000000000011",
+      "name": "Record nudge in Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const crypto = require('crypto');\nconst sign = (secret, timestamp, body) =>\n  'v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\nconst signedRequest = (path, bodyObject) => {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const base = String($env.LENDLOOP_CONVEX_SITE_URL || 'http://convex-backend:3211').replace(/\\/+$/, '');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const body = JSON.stringify(bodyObject);\n  return {\n    url: base + path,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-LendLoop-Timestamp': timestamp,\n      'X-LendLoop-Signature': sign(secret, timestamp, body),\n      'X-LendLoop-Event-Id': bodyObject.idempotencyKey || ''\n    }\n  };\n};\nconst loan = $('Loop Over Items').first().json;\nconst idempotencyKey = 'request-expire:' + loan.loanId;\nreturn { json: signedRequest('/n8n/expire-request', { idempotencyKey, loanId: loan.loanId }) };"
+      },
+      "id": "a4000004-0000-4000-8000-000000000012",
+      "name": "Sign expire-request request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a4000004-0000-4000-8000-000000000013",
+      "name": "Expire request in Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        460
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const loan = $('Loop Over Items').first().json;\nreturn { json: { ok: true, loanId: loan.loanId } };"
+      },
+      "id": "a4000004-0000-4000-8000-000000000014",
+      "name": "Mark sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const loan = $('Loop Over Items').first().json;\nconst err = $json.error;\nconst error = String((typeof err === 'string' ? err : err && err.message) || 'send or write-back failed').slice(0, 200);\nreturn { json: { ok: false, loanId: loan.loanId, error } };"
+      },
+      "id": "a4000004-0000-4000-8000-000000000015",
+      "name": "Mark failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const MAX_PAGES = 10;\nconst results = $input.all().map((i) => i.json);\nconst failed = results.filter((r) => r.ok === false);\nconst store = $getWorkflowStaticData('node');\nif ($runIndex === 0 || !Array.isArray(store.failures)) store.failures = [];\nstore.failures.push(...failed.map((f) => ({ loanId: f.loanId, error: f.error })));\nconst hasMore = $('Fetch stale requests').last().json.hasMore === true;\n// only page on while something was actually processed, otherwise the same failing loans fill every page\nconst canContinue = hasMore && results.length > failed.length && $runIndex < MAX_PAGES - 1;\nreturn [{ json: { page: $runIndex + 1, hasMore, canContinue, failedTotal: store.failures.length, failures: store.failures.slice(0, 20) } }];"
+      },
+      "id": "a4000004-0000-4000-8000-000000000016",
+      "name": "Summarize page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a4000004-0000-4000-8000-900000000016",
+              "leftValue": "={{ $json.canContinue }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a4000004-0000-4000-8000-000000000017",
+      "name": "More pages?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s = $input.first().json;\nif (s.failedTotal > 0 || s.hasMore) {\n  const list = s.failures.map((f) => f.loanId + ': ' + f.error).join('; ');\n  throw new Error('stale request follow-up incomplete: ' + s.failedTotal + ' failed' + (s.hasMore ? ', more items remain' : '') + (list ? ' (' + list + ')' : ''));\n}\nreturn [{ json: s }];"
+      },
+      "id": "a4000004-0000-4000-8000-000000000018",
+      "name": "Fail if any failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Every day at 10:00": {
+      "main": [
+        [
+          {
+            "node": "Sign stale-requests request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Sign stale-requests request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Summarize page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Needs nudge?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs nudge?": {
+      "main": [
+        [
+          {
+            "node": "Email owner about waiting request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sign expire-request request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email owner about waiting request": {
+      "main": [
+        [
+          {
+            "node": "Sign request-nudged request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign request-nudged request": {
+      "main": [
+        [
+          {
+            "node": "Record nudge in Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record nudge in Convex": {
+      "main": [
+        [
+          {
+            "node": "Mark sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign expire-request request": {
+      "main": [
+        [
+          {
+            "node": "Expire request in Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expire request in Convex": {
+      "main": [
+        [
+          {
+            "node": "Mark sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark sent": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark failed": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign stale-requests request": {
+      "main": [
+        [
+          {
+            "node": "Fetch stale requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch stale requests": {
+      "main": [
+        [
+          {
+            "node": "Split stale requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split stale requests": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize page": {
+      "main": [
+        [
+          {
+            "node": "More pages?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "More pages?": {
+      "main": [
+        [
+          {
+            "node": "Sign stale-requests request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail if any failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "lendloopErrHandler1"
+  }
+}
