@@ -1,0 +1,376 @@
+{
+  "id": "lendloopLoanStatus01",
+  "name": "LendLoop - Loan status notification",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "**Loan status notification.** Convex posts a signed JSON body here when a loan changes status. The signature and timestamp are checked first (401 on failure), a repeated event id is acknowledged without a second email, and the recipient gets one email. A failed send answers 500 so Convex retries later; the event id is only remembered after the email went out.",
+        "width": 760,
+        "height": 150
+      },
+      "id": "a1000001-0000-4000-8000-000000000001",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop/loan-status",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "a1000001-0000-4000-8000-000000000002",
+      "name": "Loan status webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        100
+      ],
+      "webhookId": "a1000001-aaaa-4000-8000-000000000001"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\nconst MAX_SKEW_SECONDS = 300;\nconst reject = (reason) => [{ json: { valid: false, reason } }];\nconst secret = $env.LENDLOOP_OUTBOUND_SECRET;\nif (!secret) return reject('secret not configured');\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst timestamp = String(headers['x-lendloop-timestamp'] || '');\nconst signature = String(headers['x-lendloop-signature'] || '');\nif (!/^\\d{1,12}$/.test(timestamp)) return reject('bad timestamp');\nif (Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) > MAX_SKEW_SECONDS) return reject('stale timestamp');\nif (!item.binary || !item.binary.data) return reject('missing raw body');\nconst raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\nconst expected = Buffer.from('v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + raw).digest('hex'));\nconst received = Buffer.from(signature);\nif (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return reject('bad signature');\nlet payload;\ntry { payload = JSON.parse(raw); } catch (e) { return reject('invalid json'); }\nconst eventId = payload && payload.eventId;\nif (typeof eventId !== 'string' || !eventId || !payload.recipient || typeof payload.recipient.email !== 'string') {\n  return reject('invalid payload');\n}\nreturn [{ json: { valid: true, eventId, payload } }];"
+      },
+      "id": "a1000001-0000-4000-8000-000000000003",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1000001-0000-4000-8000-000000000040",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1000001-0000-4000-8000-000000000004",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"error\":\"unauthorized\"}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "a1000001-0000-4000-8000-000000000005",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst seen = staticData.processedEventIds || [];\nconst current = $input.first().json;\nreturn [{ json: { ...current, duplicate: seen.includes(current.eventId) } }];"
+      },
+      "id": "a1000001-0000-4000-8000-000000000006",
+      "name": "Check duplicate event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1000001-0000-4000-8000-000000000070",
+              "leftValue": "={{ $json.duplicate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1000001-0000-4000-8000-000000000007",
+      "name": "Already processed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"status\":\"duplicate\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1000001-0000-4000-8000-000000000008",
+      "name": "Respond 200 duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { payload } = $input.first().json;\nconst loan = payload.loan || {};\nconst tool = (payload.tool && payload.tool.name) || 'a tool';\nconst name = (payload.recipient && payload.recipient.firstName) || 'there';\nconst dates = loan.startDate && loan.endDate ? ' (' + loan.startDate + ' to ' + loan.endDate + ')' : '';\nconst subjects = {\n  requested: 'New request for ' + tool,\n  approved: 'Your request for ' + tool + ' was approved',\n  declined: 'Your request for ' + tool + ' was declined',\n  returned: 'Thanks for returning ' + tool,\n  cancelled: 'A request for ' + tool + ' was cancelled'\n};\nconst lines = {\n  requested: 'Someone asked to borrow ' + tool + dates + '.',\n  approved: 'Good news: you can pick up ' + tool + dates + '.',\n  declined: 'Your request for ' + tool + dates + ' was declined.',\n  returned: tool + ' is marked as returned. Thank you!',\n  cancelled: 'The request for ' + tool + dates + ' was cancelled.'\n};\nconst status = loan.status;\nreturn [{ json: {\n  to: payload.recipient.email,\n  subject: subjects[status] || 'Update on ' + tool,\n  text: 'Hi ' + name + ',\\n\\n' + (lines[status] || 'The status of your loan changed to ' + status + '.') +\n    '\\n\\nOpen it here: ' + (payload.link || '') + '\\n\\nLendLoop'\n} }];"
+      },
+      "id": "a1000001-0000-4000-8000-000000000009",
+      "name": "Compose email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "LendLoop <noreply@lendloop.local>",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {}
+      },
+      "id": "a1000001-0000-4000-8000-000000000010",
+      "name": "Send notification email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        100
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lendloopSmtpMailpit",
+          "name": "LendLoop Mailpit SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst seen = staticData.processedEventIds || [];\nconst eventId = $('Verify signature').first().json.eventId;\nseen.push(eventId);\nstaticData.processedEventIds = seen.slice(-500);\nreturn [{ json: { eventId, recorded: true } }];"
+      },
+      "id": "a1000001-0000-4000-8000-000000000011",
+      "name": "Record event id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"status\":\"sent\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1000001-0000-4000-8000-000000000012",
+      "name": "Respond 200 sent",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"error\":\"email failed\"}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "a1000001-0000-4000-8000-000000000013",
+      "name": "Respond 500",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Loan status webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Check duplicate event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check duplicate event": {
+      "main": [
+        [
+          {
+            "node": "Already processed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already processed?": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Compose email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose email": {
+      "main": [
+        [
+          {
+            "node": "Send notification email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send notification email": {
+      "main": [
+        [
+          {
+            "node": "Record event id",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 500",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record event id": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "lendloopErrHandler1"
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "id": "lendloopErrHandler1",
+  "name": "LendLoop - Error handler",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "**Error handler.** Runs when the notification or reminder workflow fails. It emails the alert address and records the failure in Convex (signed, once per execution) so it shows up for admins.",
+        "width": 760,
+        "height": 130
+      },
+      "id": "a3000003-0000-4000-8000-000000000001",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        -140
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "a3000003-0000-4000-8000-000000000002",
+      "name": "Workflow failed",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const crypto = require('crypto');\nconst sign = (secret, timestamp, body) =>\n  'v1=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\nconst signedRequest = (path, bodyObject) => {\n  const secret = $env.LENDLOOP_INBOUND_SECRET;\n  if (!secret) throw new Error('LENDLOOP_INBOUND_SECRET is not set');\n  const base = String($env.LENDLOOP_CONVEX_SITE_URL || 'http://convex-backend:3211').replace(/\\/+$/, '');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const body = JSON.stringify(bodyObject);\n  return {\n    url: base + path,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-LendLoop-Timestamp': timestamp,\n      'X-LendLoop-Signature': sign(secret, timestamp, body),\n      'X-LendLoop-Event-Id': bodyObject.idempotencyKey || ''\n    }\n  };\n};\nconst data = $input.first().json;\nconst execution = data.execution || {};\nconst workflowName = (data.workflow && data.workflow.name) || 'unknown workflow';\nconst nodeName = execution.lastNodeExecuted || undefined;\nconst message = String((execution.error && execution.error.message) || 'unknown error').slice(0, 500);\nconst idempotencyKey = 'workflow-error:' + (execution.id || workflowName + ':' + Date.now());\nconst request = signedRequest('/n8n/workflow-error', { idempotencyKey, workflowName, nodeName, executionId: execution.id ? String(execution.id) : undefined, message });\nreturn [{ json: {\n  ...request,\n  subject: 'LendLoop workflow failed: ' + workflowName,\n  text: 'Workflow: ' + workflowName + '\\nNode: ' + (nodeName || 'n/a') + '\\nExecution: ' + (execution.id || 'n/a') + '\\nError: ' + message\n} }];"
+      },
+      "id": "a3000003-0000-4000-8000-000000000003",
+      "name": "Build alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "LendLoop <noreply@lendloop.local>",
+        "toEmail": "={{ $env.LENDLOOP_ALERT_EMAIL }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {}
+      },
+      "id": "a3000003-0000-4000-8000-000000000004",
+      "name": "Email alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lendloopSmtpMailpit",
+          "name": "LendLoop Mailpit SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a3000003-0000-4000-8000-000000000005",
+      "name": "Record error in Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "Workflow failed": {
+      "main": [
+        [
+          {
+            "node": "Build alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build alert": {
+      "main": [
+        [
+          {
+            "node": "Email alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Record error in Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

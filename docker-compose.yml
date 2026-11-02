@@ -1,0 +1,101 @@
+# local stack: self-hosted convex, mailpit and n8n. the next app runs on the host (pnpm dev).
+name: lendloop
+
+services:
+  convex-backend:
+    image: ghcr.io/get-convex/convex-backend:latest
+    stop_grace_period: 10s
+    stop_signal: SIGINT
+    ports:
+      - "3210:3210"
+      - "3211:3211"
+    volumes:
+      - convex-data:/convex/data
+    environment:
+      # origins as seen by the host; the n8n container reaches http actions on convex-backend:3211 directly
+      CONVEX_CLOUD_ORIGIN: http://127.0.0.1:3210
+      CONVEX_SITE_ORIGIN: http://127.0.0.1:3211
+      DO_NOT_REQUIRE_SSL: "true"
+      RUST_LOG: info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 5s
+      start_period: 10s
+      retries: 20
+
+  convex-dashboard:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    stop_grace_period: 10s
+    stop_signal: SIGINT
+    ports:
+      - "6791:6791"
+    environment:
+      NEXT_PUBLIC_DEPLOYMENT_URL: http://127.0.0.1:3210
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+
+  mailpit:
+    image: axllent/mailpit:v1
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      retries: 12
+
+  # one-shot: loads credentials and workflows into the n8n volume, then activates them.
+  # it runs before n8n starts because the cli cannot change a running instance's active workflows.
+  n8n-import:
+    image: &n8n-image n8nio/n8n:2.46.4
+    user: root
+    entrypoint: ["/bin/sh", "/import/import.sh"]
+    environment: &n8n-env
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-UTC}
+      TZ: ${GENERIC_TIMEZONE:-UTC}
+      LENDLOOP_OUTBOUND_SECRET: ${LENDLOOP_OUTBOUND_SECRET}
+      LENDLOOP_INBOUND_SECRET: ${LENDLOOP_INBOUND_SECRET}
+      LENDLOOP_CONVEX_SITE_URL: ${LENDLOOP_CONVEX_SITE_URL:-http://convex-backend:3211}
+      LENDLOOP_ALERT_EMAIL: ${LENDLOOP_ALERT_EMAIL:-alerts@example.com}
+      # code nodes need crypto and $env; task runners read the same variables
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      N8N_RUNNERS_ENABLED: "true"
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n/workflows:/import/workflows:ro
+      - ./n8n/credentials:/import/credentials:ro
+      - ./n8n/import.sh:/import/import.sh:ro
+    restart: "no"
+
+  n8n:
+    image: *n8n-image
+    ports:
+      - "5678:5678"
+    environment:
+      <<: *n8n-env
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      WEBHOOK_URL: http://localhost:5678/
+    volumes:
+      - n8n-data:/home/node/.n8n
+    depends_on:
+      mailpit:
+        condition: service_healthy
+      n8n-import:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
+      interval: 5s
+      start_period: 15s
+      retries: 20
+
+volumes:
+  convex-data:
+  n8n-data:
