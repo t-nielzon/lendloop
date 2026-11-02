@@ -2,7 +2,7 @@ import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction, type ActionCtx } from "./_generated/server";
 import { isValidDate } from "./lib/dates";
-import { verify } from "./lib/signing";
+import { verifyAny } from "./lib/signing";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -42,9 +42,9 @@ async function authenticate(request: Request): Promise<{ ok: true; body: Parsed 
   if (declared > MAX_BODY_BYTES) return { ok: false, response: json(413, { error: "payload too large" }) };
   const raw = await readCapped(request, MAX_BODY_BYTES);
   if (raw === null) return { ok: false, response: json(413, { error: "payload too large" }) };
-  const secret = process.env.LENDLOOP_INBOUND_SECRET ?? "";
-  const valid = await verify(
-    secret,
+  // the previous secret is only set during a rotation and is ignored when empty
+  const valid = await verifyAny(
+    [process.env.LENDLOOP_INBOUND_SECRET, process.env.LENDLOOP_INBOUND_SECRET_PREVIOUS],
     request.headers.get("x-lendloop-timestamp"),
     raw,
     request.headers.get("x-lendloop-signature"),
@@ -70,6 +70,13 @@ function route(handle: (ctx: ActionCtx, body: Parsed) => Promise<Response>) {
     return await handle(ctx, auth.body);
   });
 }
+
+async function sha256Hex16(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
+}
+
+const validDate = (v: unknown): v is string => typeof v === "string" && isValidDate(v);
 
 const http = httpRouter();
 
@@ -111,6 +118,93 @@ http.route({
       message,
     });
     return json(200, { status: "recorded" });
+  }),
+});
+
+http.route({
+  path: "/n8n/upcoming-pickups",
+  method: "POST",
+  handler: route(async (ctx, body) => {
+    if (!validDate(body.asOf)) return bad();
+    const { loans, hasMore } = await ctx.runQuery(internal.automation.upcomingPickups, { asOf: body.asOf });
+    return json(200, { asOf: body.asOf, loans, hasMore });
+  }),
+});
+
+http.route({
+  path: "/n8n/pickup-reminder-sent",
+  method: "POST",
+  handler: route(async (ctx, body) => {
+    const { idempotencyKey, loanId, asOf } = body;
+    if (!isStr(idempotencyKey) || !isStr(loanId) || !validDate(asOf)) return bad();
+    const result = await ctx.runMutation(internal.automation.recordPickupReminder, { idempotencyKey, loanId, asOf });
+    if (result === "invalid") return bad();
+    return json(200, { status: result });
+  }),
+});
+
+http.route({
+  path: "/n8n/stale-requests",
+  method: "POST",
+  handler: route(async (ctx, body) => {
+    if (!validDate(body.asOf)) return bad();
+    const { toNudge, toExpire, hasMore } = await ctx.runQuery(internal.automation.staleRequests, { asOf: body.asOf });
+    return json(200, { asOf: body.asOf, toNudge, toExpire, hasMore });
+  }),
+});
+
+http.route({
+  path: "/n8n/request-nudged",
+  method: "POST",
+  handler: route(async (ctx, body) => {
+    const { idempotencyKey, loanId } = body;
+    if (!isStr(idempotencyKey) || !isStr(loanId)) return bad();
+    const result = await ctx.runMutation(internal.automation.recordNudge, { idempotencyKey, loanId });
+    if (result === "invalid") return bad();
+    return json(200, { status: result });
+  }),
+});
+
+http.route({
+  path: "/n8n/expire-request",
+  method: "POST",
+  handler: route(async (ctx, body) => {
+    const { idempotencyKey, loanId } = body;
+    if (!isStr(idempotencyKey) || !isStr(loanId)) return bad();
+    const result = await ctx.runMutation(internal.automation.expireRequest, { idempotencyKey, loanId });
+    if (result === "invalid") return bad();
+    return json(200, { status: result });
+  }),
+});
+
+http.route({
+  path: "/n8n/delivery-health",
+  method: "POST",
+  handler: route(async (ctx) => {
+    const { dead, stuckPending, oldestStuckAt, rowIds } = await ctx.runQuery(internal.automation.deliveryHealth, {});
+    // the key is stable for the same set of failing rows so one incident alerts once
+    const incidentKey = dead + stuckPending === 0 ? null : await sha256Hex16(rowIds.join(","));
+    return json(200, { checkedAt: new Date().toISOString(), dead, stuckPending, oldestStuckAt, incidentKey });
+  }),
+});
+
+http.route({
+  path: "/n8n/health-alert-sent",
+  method: "POST",
+  handler: route(async (ctx, body) => {
+    const { idempotencyKey, incidentKey, dead, stuckPending, oldestStuckAt } = body;
+    const count = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
+    if (!isStr(idempotencyKey) || !isStr(incidentKey) || !count(dead) || !count(stuckPending)) return bad();
+    if (oldestStuckAt !== undefined && oldestStuckAt !== null && !count(oldestStuckAt)) return bad();
+    const result = await ctx.runMutation(internal.automation.recordHealthAlert, {
+      idempotencyKey,
+      incidentKey,
+      dead,
+      stuckPending,
+      oldestStuckAt: oldestStuckAt ?? undefined,
+    });
+    if (result === "invalid") return bad();
+    return json(200, { status: result });
   }),
 });
 

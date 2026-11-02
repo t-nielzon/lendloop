@@ -2,6 +2,7 @@ import type { Doc } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { firstName } from "./auth";
 import { todayUtc } from "./dates";
+import { lastAutomationOf } from "./loanEvents";
 
 // emails and tokens are deliberately left out of every client-facing loan shape
 export async function toLoanView(ctx: QueryCtx, loan: Doc<"loans">, today: string = todayUtc()) {
@@ -27,6 +28,7 @@ export async function toLoanView(ctx: QueryCtx, loan: Doc<"loans">, today: strin
     decidedAt: loan.decidedAt,
     returnedAt: loan.returnedAt,
     reminderCount: loan.reminderCount,
+    lastAutomation: lastAutomationOf(loan),
     isOverdue: loan.status === "approved" && loan.endDate < today,
   };
 }

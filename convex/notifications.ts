@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { insertLoanEvent } from "./lib/loanEvents";
 import { signatureHeader } from "./lib/signing";
 
 export const BACKOFF_SECONDS = [30, 120, 600, 3600, 21600];
@@ -66,7 +67,7 @@ export const markDelivered = internalMutation({
       deliveredAt: now,
       lastError: undefined,
     });
-    await ctx.db.insert("loanEvents", {
+    await insertLoanEvent(ctx, {
       loanId: row.loanId,
       at: now,
       actorType: "system",
@@ -84,7 +85,7 @@ export const markFailed = internalMutation({
     const attempts = row.attempts + 1;
     if (attempts >= MAX_ATTEMPTS) {
       await ctx.db.patch(row._id, { status: "dead", attempts, lastError: args.error });
-      await ctx.db.insert("loanEvents", {
+      await insertLoanEvent(ctx, {
         loanId: row.loanId,
         at: now,
         actorType: "system",

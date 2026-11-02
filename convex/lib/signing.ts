@@ -58,3 +58,19 @@ export async function verify(
   const expected = await sign(secret, timestamp, body);
   return constantTimeEqual(expected, signature.slice(prefix.length));
 }
+
+// any configured secret may have signed the request; every candidate is checked so timing does not reveal which one matched
+export async function verifyAny(
+  secrets: Array<string | undefined>,
+  timestamp: string | null | undefined,
+  body: string,
+  signature: string | null | undefined,
+  options: VerifyOptions = {},
+): Promise<boolean> {
+  const candidates = secrets.filter((s): s is string => !!s);
+  let ok = false;
+  for (const secret of candidates) {
+    if (await verify(secret, timestamp, body, signature, options)) ok = true;
+  }
+  return ok;
+}

@@ -72,3 +72,19 @@ export const automationErrors = query({
     }));
   },
 });
+
+export const healthAlerts = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const rows = await ctx.db.query("healthAlerts").withIndex("by_sent").order("desc").take(50);
+    return rows.map((r) => ({
+      id: r._id,
+      incidentKey: r.incidentKey,
+      dead: r.dead,
+      stuckPending: r.stuckPending,
+      oldestStuckAt: r.oldestStuckAt,
+      sentAt: r.sentAt,
+    }));
+  },
+});

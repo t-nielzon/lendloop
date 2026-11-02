@@ -23,6 +23,7 @@ export const loanStatus = v.union(
   v.literal("declined"),
   v.literal("cancelled"),
   v.literal("returned"),
+  v.literal("expired"),
 );
 
 export const loanEventType = v.union(
@@ -34,6 +35,9 @@ export const loanEventType = v.union(
   v.literal("notification_delivered"),
   v.literal("notification_failed"),
   v.literal("reminder_sent"),
+  v.literal("pickup_reminder_sent"),
+  v.literal("request_nudged"),
+  v.literal("expired"),
 );
 
 export const actorType = v.union(v.literal("user"), v.literal("automation"), v.literal("system"));
@@ -83,6 +87,11 @@ export default defineSchema({
     returnedAt: v.optional(v.number()),
     lastReminderOn: v.optional(v.string()),
     reminderCount: v.number(),
+    pickupReminderOn: v.optional(v.string()),
+    nudgedAt: v.optional(v.number()),
+    // denormalized from the latest automation event so list views need no extra reads
+    lastAutomationAt: v.optional(v.number()),
+    lastAutomationType: v.optional(loanEventType),
   })
     .index("by_tool_status", ["toolId", "status"])
     .index("by_borrower", ["borrowerId"])
@@ -122,6 +131,16 @@ export default defineSchema({
     loanId: v.optional(v.id("loans")),
     receivedAt: v.number(),
   }).index("by_key", ["idempotencyKey"]),
+
+  healthAlerts: defineTable({
+    incidentKey: v.string(),
+    dead: v.number(),
+    stuckPending: v.number(),
+    oldestStuckAt: v.optional(v.number()),
+    sentAt: v.number(),
+  })
+    .index("by_key", ["incidentKey"])
+    .index("by_sent", ["sentAt"]),
 
   automationErrors: defineTable({
     workflowName: v.string(),

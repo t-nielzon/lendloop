@@ -2,6 +2,7 @@ import type { Doc } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import type { MutationCtx } from "../_generated/server";
 import { firstName } from "./auth";
+import { insertLoanEvent } from "./loanEvents";
 
 type LoanStatus = Doc<"loans">["status"];
 
@@ -20,15 +21,16 @@ export async function recordTransition(
   ctx: MutationCtx,
   loan: Doc<"loans">,
   previousStatus: LoanStatus | null,
-  actor: Doc<"users">,
+  actor: Doc<"users"> | null,
   detail?: string,
 ) {
   const now = Date.now();
-  await ctx.db.insert("loanEvents", {
+  // a null actor is the automation (expiry), which is attributed as such and not to a user
+  await insertLoanEvent(ctx, {
     loanId: loan._id,
     at: now,
-    actorType: "user",
-    actorId: actor._id,
+    actorType: actor ? "user" : "automation",
+    actorId: actor?._id,
     type: loan.status,
     detail,
   });
@@ -38,7 +40,7 @@ export async function recordTransition(
   const recipient = await ctx.db.get(toOwner ? loan.ownerId : loan.borrowerId);
   if (!recipient?.email) {
     // a delivery without an address can never succeed, so it is recorded instead of queued
-    await ctx.db.insert("loanEvents", {
+    await insertLoanEvent(ctx, {
       loanId: loan._id,
       at: now,
       actorType: "system",
