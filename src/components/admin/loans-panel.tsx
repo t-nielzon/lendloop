@@ -4,14 +4,9 @@ import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmptyState, ListSkeleton } from "@/components/common/states";
+import { LoanActions } from "@/components/loans/loan-actions";
 import { LoanRow } from "@/components/loans/loan-row";
 
 const STATUSES = ["requested", "approved", "declined", "cancelled", "returned"] as const;
@@ -19,8 +14,7 @@ type Filter = "all" | "overdue" | (typeof STATUSES)[number];
 
 export function LoansPanel() {
   const [filter, setFilter] = useState<Filter>("all");
-  const args =
-    filter === "all" ? {} : filter === "overdue" ? { overdueOnly: true } : { status: filter };
+  const args = filter === "all" ? {} : filter === "overdue" ? { overdueOnly: true } : { status: filter };
   const loans = useQuery(api.loans.listAll, args);
 
   return (
@@ -50,7 +44,11 @@ export function LoansPanel() {
         <ul className="space-y-3">
           {loans.map((loan) => (
             <li key={loan.id}>
-              <LoanRow loan={loan} subtitle={`${loan.ownerName} to ${loan.borrowerName}`} />
+              <LoanRow
+                loan={loan}
+                subtitle={`${loan.ownerName} to ${loan.borrowerName}`}
+                actions={<LoanActions loanId={loan.id} status={loan.status} canManage />}
+              />
             </li>
           ))}
         </ul>

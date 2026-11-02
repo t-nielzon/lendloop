@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Inbox, Lock } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, Compass, Inbox, Lock } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export function EmptyState({
@@ -39,6 +41,19 @@ export function ForbiddenState({ message = "You don't have access to this page."
       <Lock className="size-8 text-muted-foreground" aria-hidden />
       <h2 className="font-medium">Access restricted</h2>
       <p className="text-sm text-muted-foreground">{message}</p>
+    </div>
+  );
+}
+
+export function NotFoundState({ message }: { message: string }) {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-10 text-center" role="status">
+      <Compass className="size-8 text-muted-foreground" aria-hidden />
+      <h2 className="font-medium">Not found</h2>
+      <p className="text-sm text-muted-foreground">{message}</p>
+      <Button asChild variant="outline" size="sm">
+        <Link href="/">Back to the catalog</Link>
+      </Button>
     </div>
   );
 }

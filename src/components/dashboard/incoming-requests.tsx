@@ -4,13 +4,7 @@ import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmptyState, ListSkeleton } from "@/components/common/states";
 import { LoanActions } from "@/components/loans/loan-actions";
 import { LoanRow } from "@/components/loans/loan-row";
@@ -54,7 +48,7 @@ export function IncomingRequests() {
               <LoanRow
                 loan={loan}
                 subtitle={`Borrower: ${loan.borrowerName}`}
-                actions={<LoanActions loanId={loan.id} status={loan.status} role="owner" />}
+                actions={<LoanActions loanId={loan.id} status={loan.status} canManage />}
               />
             </li>
           ))}

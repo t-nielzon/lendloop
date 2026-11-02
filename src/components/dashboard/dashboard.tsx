@@ -1,18 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { QueryBoundary } from "@/components/common/query-boundary";
+import { useViewer } from "@/components/common/use-viewer";
 import { EmptyState, ListSkeleton } from "@/components/common/states";
 import { IncomingRequests } from "./incoming-requests";
 import { MyListings } from "./my-listings";
 import { MyRequests } from "./my-requests";
 
 export function Dashboard() {
-  const { isAuthenticated, isLoading } = useConvexAuth();
-  if (isLoading) return <ListSkeleton />;
-  if (!isAuthenticated) return <EmptyState title="Sign in to see your dashboard" />;
+  const { status } = useViewer();
+  if (status === "loading") return <ListSkeleton />;
+  if (status === "anonymous") return <EmptyState title="Sign in to see your dashboard" />;
 
   return (
     <Tabs defaultValue="listings" className="space-y-4">
@@ -27,13 +28,19 @@ export function Dashboard() {
         </Button>
       </div>
       <TabsContent value="listings">
-        <MyListings />
+        <QueryBoundary>
+          <MyListings />
+        </QueryBoundary>
       </TabsContent>
       <TabsContent value="requests">
-        <MyRequests />
+        <QueryBoundary>
+          <MyRequests />
+        </QueryBoundary>
       </TabsContent>
       <TabsContent value="incoming">
-        <IncomingRequests />
+        <QueryBoundary>
+          <IncomingRequests />
+        </QueryBoundary>
       </TabsContent>
     </Tabs>
   );

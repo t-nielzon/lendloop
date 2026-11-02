@@ -1,21 +1,27 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { useAction } from "@/components/common/use-action";
-import { EmptyState, ErrorState, ForbiddenState, ListSkeleton } from "@/components/common/states";
+import { QueryBoundary } from "@/components/common/query-boundary";
+import { useViewer } from "@/components/common/use-viewer";
+import { EmptyState, ErrorState, ForbiddenState, ListSkeleton, NotFoundState } from "@/components/common/states";
 import type { Category, Condition } from "@/lib/labels";
 import { ToolForm } from "./tool-form";
 
 export function EditTool({ toolId }: { toolId: Id<"tools"> }) {
-  const { isAuthenticated, isLoading } = useConvexAuth();
-  if (isLoading) return <ListSkeleton rows={2} />;
-  if (!isAuthenticated) return <EmptyState title="Sign in to edit tools" />;
-  return <Loaded toolId={toolId} />;
+  const { status } = useViewer();
+  if (status === "loading") return <ListSkeleton rows={2} />;
+  if (status === "anonymous") return <EmptyState title="Sign in to edit tools" />;
+  return (
+    <QueryBoundary>
+      <Loaded toolId={toolId} />
+    </QueryBoundary>
+  );
 }
 
 function Loaded({ toolId }: { toolId: Id<"tools"> }) {
@@ -26,9 +32,9 @@ function Loaded({ toolId }: { toolId: Id<"tools"> }) {
   const { pending, run } = useAction();
 
   if (tool === undefined) return <ListSkeleton rows={2} />;
-  if (tool === null) return <ErrorState message="This tool doesn&apos;t exist." />;
+  if (tool === null) return <NotFoundState message="This tool doesn't exist." />;
   if (!tool.canManage) return <ForbiddenState message="Only the owner can edit this tool." />;
-  if (tool.status === "archived") return <ErrorState message="Archived tools can&apos;t be edited." />;
+  if (tool.status === "archived") return <ErrorState message="Archived tools can't be edited." />;
 
   async function onArchive() {
     const done = await run(() => archive({ toolId }), "Tool archived.");

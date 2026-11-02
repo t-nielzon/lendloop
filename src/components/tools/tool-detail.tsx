@@ -1,22 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { EmptyState, ErrorState, ListSkeleton } from "@/components/common/states";
+import { QueryBoundary } from "@/components/common/query-boundary";
+import { useViewer } from "@/components/common/use-viewer";
+import { EmptyState, ListSkeleton, NotFoundState } from "@/components/common/states";
 import { formatRange } from "@/lib/dates";
 import { categoryLabel, conditionLabel } from "@/lib/labels";
 import { AvailabilityBadge } from "./availability-badge";
 import { RequestForm } from "./request-form";
 
 export function ToolDetail({ toolId }: { toolId: Id<"tools"> }) {
-  const { isAuthenticated, isLoading } = useConvexAuth();
-  if (isLoading) return <ListSkeleton rows={2} />;
-  if (!isAuthenticated) {
+  const { status } = useViewer();
+  if (status === "loading") return <ListSkeleton rows={2} />;
+  if (status === "anonymous") {
     return (
       <EmptyState
         title="Sign in to view this tool"
@@ -24,7 +26,11 @@ export function ToolDetail({ toolId }: { toolId: Id<"tools"> }) {
       />
     );
   }
-  return <Loaded toolId={toolId} />;
+  return (
+    <QueryBoundary>
+      <Loaded toolId={toolId} />
+    </QueryBoundary>
+  );
 }
 
 function Loaded({ toolId }: { toolId: Id<"tools"> }) {
@@ -32,7 +38,7 @@ function Loaded({ toolId }: { toolId: Id<"tools"> }) {
 
   if (tool === undefined) return <ListSkeleton rows={2} />;
   if (tool === null) {
-    return <ErrorState message="This tool doesn't exist or is no longer available." />;
+    return <NotFoundState message="This tool doesn't exist or is no longer available." />;
   }
 
   return (
@@ -69,9 +75,7 @@ function Loaded({ toolId }: { toolId: Id<"tools"> }) {
                 {tool.bookedRanges.map((r) => (
                   <li key={`${r.startDate}-${r.endDate}`}>
                     {formatRange(r.startDate, r.endDate)}
-                    {r.borrowerName ? (
-                      <span className="text-muted-foreground"> ({r.borrowerName})</span>
-                    ) : null}
+                    {r.borrowerName ? <span className="text-muted-foreground"> ({r.borrowerName})</span> : null}
                   </li>
                 ))}
               </ul>
@@ -82,11 +86,7 @@ function Loaded({ toolId }: { toolId: Id<"tools"> }) {
 
       <Card className="h-fit">
         <CardContent className="pt-6">
-          <RequestForm
-            toolId={tool.id}
-            isMine={tool.isMine || tool.status === "archived"}
-            booked={tool.bookedRanges}
-          />
+          <RequestForm toolId={tool.id} isMine={tool.isMine} isArchived={tool.isArchived} booked={tool.bookedRanges} />
         </CardContent>
       </Card>
     </div>

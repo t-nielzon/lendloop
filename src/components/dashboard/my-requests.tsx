@@ -31,7 +31,7 @@ export function MyRequests() {
           <LoanRow
             loan={loan}
             subtitle={`Owner: ${loan.ownerName}`}
-            actions={<LoanActions loanId={loan.id} status={loan.status} role="borrower" />}
+            actions={<LoanActions loanId={loan.id} status={loan.status} canCancel />}
           />
         </li>
       ))}

@@ -1,21 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { OverdueBadge, StatusBadge, type LoanStatus } from "@/components/common/status-badge";
 import { QueryBoundary } from "@/components/common/query-boundary";
-import { EmptyState, ErrorState, ListSkeleton } from "@/components/common/states";
+import { useViewer } from "@/components/common/use-viewer";
+import { EmptyState, ListSkeleton, NotFoundState } from "@/components/common/states";
 import { formatDateTime, formatRange } from "@/lib/dates";
 import { LoanActions } from "./loan-actions";
 import { LoanTimeline } from "./loan-timeline";
 
 export function LoanDetail({ loanId }: { loanId: Id<"loans"> }) {
-  const { isAuthenticated, isLoading } = useConvexAuth();
-  if (isLoading) return <ListSkeleton rows={2} />;
-  if (!isAuthenticated) return <EmptyState title="Sign in to view this loan" />;
+  const { status } = useViewer();
+  if (status === "loading") return <ListSkeleton rows={2} />;
+  if (status === "anonymous") return <EmptyState title="Sign in to view this loan" />;
   return (
     <QueryBoundary>
       <Loaded loanId={loanId} />
@@ -27,9 +28,7 @@ function Loaded({ loanId }: { loanId: Id<"loans"> }) {
   const loan = useQuery(api.loans.get, { loanId });
 
   if (loan === undefined) return <ListSkeleton rows={2} />;
-  if (loan === null) return <ErrorState message="This loan doesn&apos;t exist." />;
-
-  const role = loan.viewerRole === "owner" || loan.viewerRole === "borrower" ? loan.viewerRole : null;
+  if (loan === null) return <NotFoundState message="This loan doesn't exist." />;
 
   return (
     <div className="grid gap-6 md:grid-cols-[1fr_20rem]">
@@ -68,7 +67,7 @@ function Loaded({ loanId }: { loanId: Id<"loans"> }) {
               </>
             ) : null}
           </dl>
-          {role ? <LoanActions loanId={loan.id} status={loan.status} role={role} /> : null}
+          <LoanActions loanId={loan.id} status={loan.status} canManage={loan.canManage} canCancel={loan.canCancel} />
         </CardContent>
       </Card>
       <Card className="h-fit">

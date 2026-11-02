@@ -7,17 +7,17 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { useAction } from "@/components/common/use-action";
 
-type Role = "owner" | "borrower";
-
 // buttons mirror the transitions convex allows; the server remains the source of truth
 export function LoanActions({
   loanId,
   status,
-  role,
+  canManage,
+  canCancel,
 }: {
   loanId: Id<"loans">;
   status: string;
-  role: Role;
+  canManage?: boolean;
+  canCancel?: boolean;
 }) {
   const approve = useMutation(api.loans.approve);
   const decline = useMutation(api.loans.decline);
@@ -25,7 +25,7 @@ export function LoanActions({
   const markReturned = useMutation(api.loans.markReturned);
   const { pending, run } = useAction();
 
-  if (role === "owner" && status === "requested") {
+  if (canManage && status === "requested") {
     return (
       <div className="flex gap-2">
         <Button size="sm" disabled={pending} onClick={() => run(() => approve({ loanId }), "Request approved.")}>
@@ -46,7 +46,7 @@ export function LoanActions({
     );
   }
 
-  if (role === "owner" && status === "approved") {
+  if (canManage && status === "approved") {
     return (
       <ConfirmDialog
         trigger={
@@ -62,9 +62,14 @@ export function LoanActions({
     );
   }
 
-  if (role === "borrower" && status === "requested") {
+  if (canCancel && status === "requested") {
     return (
-      <Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => cancel({ loanId }), "Request cancelled.")}>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={pending}
+        onClick={() => run(() => cancel({ loanId }), "Request cancelled.")}
+      >
         Cancel request
       </Button>
     );

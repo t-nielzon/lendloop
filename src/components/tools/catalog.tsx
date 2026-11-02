@@ -6,13 +6,9 @@ import { Search } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useDebounced } from "@/components/common/use-debounced";
+import { useViewer } from "@/components/common/use-viewer";
 import { CardGridSkeleton, EmptyState } from "@/components/common/states";
 import { CATEGORIES, type Category } from "@/lib/labels";
 import { ToolCard } from "./tool-card";
@@ -24,11 +20,18 @@ export function Catalog() {
   const [category, setCategory] = useState<Category | "all">("all");
   const [availability, setAvailability] = useState<Availability>("all");
 
-  const tools = useQuery(api.tools.listPublic, {
-    search: search.trim() || undefined,
+  const { status } = useViewer();
+  // typing waits briefly so each keystroke does not open a new subscription
+  const debouncedSearch = useDebounced(search.trim(), 250);
+  const args = {
+    search: debouncedSearch || undefined,
     category: category === "all" ? undefined : category,
     availability,
-  });
+  };
+  // signed-in members get owner first names and the "yours" marker, visitors get the owner-free list
+  const publicTools = useQuery(api.tools.listPublic, status === "anonymous" ? args : "skip");
+  const memberTools = useQuery(api.tools.list, status === "ready" ? args : "skip");
+  const tools = status === "anonymous" ? publicTools : status === "ready" ? memberTools : undefined;
 
   return (
     <section aria-labelledby="catalog-heading" className="space-y-4">
@@ -84,10 +87,7 @@ export function Catalog() {
       {tools === undefined ? (
         <CardGridSkeleton />
       ) : tools.length === 0 ? (
-        <EmptyState
-          title="No tools match"
-          description="Try a different search or clear the filters."
-        />
+        <EmptyState title="No tools match" description="Try a different search or clear the filters." />
       ) : (
         <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {tools.map((tool) => (

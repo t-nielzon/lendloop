@@ -1,9 +1,8 @@
 "use client";
 
-import { useConvexAuth, useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QueryBoundary } from "@/components/common/query-boundary";
+import { useViewer } from "@/components/common/use-viewer";
 import { EmptyState, ForbiddenState, ListSkeleton } from "@/components/common/states";
 import { ErrorsPanel } from "./errors-panel";
 import { LoansPanel } from "./loans-panel";
@@ -11,13 +10,12 @@ import { OutboxPanel } from "./outbox-panel";
 import { UsersPanel } from "./users-panel";
 
 export function AdminConsole() {
-  const { isAuthenticated, isLoading } = useConvexAuth();
-  const viewer = useQuery(api.users.me);
+  const { status, viewer } = useViewer();
 
-  if (isLoading || (isAuthenticated && viewer === undefined)) return <ListSkeleton rows={2} />;
-  if (!isAuthenticated) return <EmptyState title="Sign in to continue" />;
+  if (status === "loading") return <ListSkeleton rows={2} />;
+  if (status === "anonymous") return <EmptyState title="Sign in to continue" />;
   // admin queries are only mounted for admins; convex enforces the same rule server-side
-  if (viewer?.role !== "admin") return <ForbiddenState message="This area is for administrators." />;
+  if (viewer.role !== "admin") return <ForbiddenState message="This area is for administrators." />;
 
   return (
     <QueryBoundary>

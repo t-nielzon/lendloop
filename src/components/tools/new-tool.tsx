@@ -1,15 +1,16 @@
 "use client";
 
-import { useConvexAuth, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
+import { useViewer } from "@/components/common/use-viewer";
 import { EmptyState, ListSkeleton } from "@/components/common/states";
 import { ToolForm } from "./tool-form";
 
 export function NewTool() {
-  const { isAuthenticated, isLoading } = useConvexAuth();
+  const { status } = useViewer();
   const create = useMutation(api.tools.create);
-  if (isLoading) return <ListSkeleton rows={2} />;
-  if (!isAuthenticated) return <EmptyState title="Sign in to list a tool" />;
+  if (status === "loading") return <ListSkeleton rows={2} />;
+  if (status === "anonymous") return <EmptyState title="Sign in to list a tool" />;
   return (
     <ToolForm
       initial={{ name: "", description: "", category: "other", condition: "good" }}

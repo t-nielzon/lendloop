@@ -19,10 +19,12 @@ type Booked = { startDate: string; endDate: string };
 export function RequestForm({
   toolId,
   isMine,
+  isArchived,
   booked,
 }: {
   toolId: Id<"tools">;
   isMine: boolean;
+  isArchived: boolean;
   booked: Booked[];
 }) {
   const { isAuthenticated } = useConvexAuth();
@@ -32,7 +34,7 @@ export function RequestForm({
   const [range, setRange] = useState<DateRange | undefined>();
   const [note, setNote] = useState("");
 
-  const disabled = isMine || !isAuthenticated;
+  const disabled = isMine || isArchived || !isAuthenticated;
   const ready = Boolean(range?.from && range?.to);
 
   async function submit(e: React.FormEvent) {
@@ -56,12 +58,12 @@ export function RequestForm({
       <h2 id="request-heading" className="text-lg font-semibold">
         Request this tool
       </h2>
-      {isMine ? (
+      {isArchived ? (
+        <p className="text-sm text-muted-foreground">This tool is archived, so it can&apos;t be requested.</p>
+      ) : isMine ? (
         <p className="text-sm text-muted-foreground">This is your tool, so you can&apos;t request it.</p>
       ) : null}
-      {!isAuthenticated ? (
-        <p className="text-sm text-muted-foreground">Sign in to request this tool.</p>
-      ) : null}
+      {!isAuthenticated ? <p className="text-sm text-muted-foreground">Sign in to request this tool.</p> : null}
       <div className="space-y-1.5">
         <Label htmlFor="request-dates">Dates</Label>
         <DateRangePicker

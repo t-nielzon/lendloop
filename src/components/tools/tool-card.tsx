@@ -12,6 +12,8 @@ export type ToolCardData = {
   condition: string;
   availableNow: boolean;
   nextFreeDate?: string;
+  ownerName?: string;
+  isMine?: boolean;
 };
 
 export function ToolCard({ tool, href }: { tool: ToolCardData; href: string }) {
@@ -31,7 +33,9 @@ export function ToolCard({ tool, href }: { tool: ToolCardData; href: string }) {
           <Badge variant="outline">{categoryLabel(tool.category)}</Badge>
           <Badge variant="outline">{conditionLabel(tool.condition)}</Badge>
           <AvailabilityBadge availableNow={tool.availableNow} nextFreeDate={tool.nextFreeDate} />
+          {tool.isMine ? <Badge variant="secondary">Yours</Badge> : null}
         </div>
+        {tool.ownerName ? <p className="text-xs text-muted-foreground">Shared by {tool.ownerName}</p> : null}
       </CardContent>
     </Card>
   );
