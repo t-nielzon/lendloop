@@ -13,11 +13,7 @@ export const toolCategory = v.union(
   v.literal("other"),
 );
 
-export const toolCondition = v.union(
-  v.literal("new"),
-  v.literal("good"),
-  v.literal("worn"),
-);
+export const toolCondition = v.union(v.literal("new"), v.literal("good"), v.literal("worn"));
 
 export const toolStatus = v.union(v.literal("active"), v.literal("archived"));
 
@@ -40,17 +36,9 @@ export const loanEventType = v.union(
   v.literal("reminder_sent"),
 );
 
-export const actorType = v.union(
-  v.literal("user"),
-  v.literal("automation"),
-  v.literal("system"),
-);
+export const actorType = v.union(v.literal("user"), v.literal("automation"), v.literal("system"));
 
-export const outboxStatus = v.union(
-  v.literal("pending"),
-  v.literal("delivered"),
-  v.literal("dead"),
-);
+export const outboxStatus = v.union(v.literal("pending"), v.literal("delivered"), v.literal("dead"));
 
 export default defineSchema({
   users: defineTable({
@@ -75,6 +63,7 @@ export default defineSchema({
   })
     .index("by_owner", ["ownerId"])
     .index("by_status", ["status"])
+    .index("by_status_category", ["status", "category"])
     .searchIndex("search_name", {
       searchField: "name",
       filterFields: ["status", "category"],
@@ -98,6 +87,7 @@ export default defineSchema({
     .index("by_tool_status", ["toolId", "status"])
     .index("by_borrower", ["borrowerId"])
     .index("by_owner", ["ownerId"])
+    .index("by_owner_status", ["ownerId", "status"])
     .index("by_status_endDate", ["status", "endDate"]),
 
   loanEvents: defineTable({

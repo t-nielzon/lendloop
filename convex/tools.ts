@@ -95,10 +95,12 @@ export const listMine = query({
 });
 
 export const get = query({
-  args: { toolId: v.id("tools") },
+  // a plain string so a malformed url segment yields null instead of an argument validation error
+  args: { toolId: v.string() },
   handler: async (ctx, args) => {
     const viewer = await requireUser(ctx);
-    const tool = await ctx.db.get(args.toolId);
+    const toolId = ctx.db.normalizeId("tools", args.toolId);
+    const tool = toolId ? await ctx.db.get(toolId) : null;
     if (!tool) return null;
     const isOwnerOrAdmin = tool.ownerId === viewer._id || viewer.role === "admin";
     if (tool.status === "archived" && !isOwnerOrAdmin) return null;
@@ -125,6 +127,7 @@ export const get = query({
       status: tool.status,
       ownerName: owner ? firstName(owner.name) : "Member",
       isMine: tool.ownerId === viewer._id,
+      isArchived: tool.status === "archived",
       canManage: isOwnerOrAdmin,
       availableNow: a.availableNow,
       nextFreeDate: a.nextFreeDate,

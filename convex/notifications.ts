@@ -66,7 +66,12 @@ export const markDelivered = internalMutation({
       deliveredAt: now,
       lastError: undefined,
     });
-    await ctx.db.insert("loanEvents", { loanId: row.loanId, at: now, actorType: "system", type: "notification_delivered" });
+    await ctx.db.insert("loanEvents", {
+      loanId: row.loanId,
+      at: now,
+      actorType: "system",
+      type: "notification_delivered",
+    });
   },
 });
 

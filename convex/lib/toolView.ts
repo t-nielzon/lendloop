@@ -32,32 +32,35 @@ export function computeAvailability(loans: Doc<"loans">[], today: string) {
   return { availableNow: false, nextFreeDate: cursor as string | undefined };
 }
 
+const MAX_TOOLS = 100;
+
+// every filter runs while streaming rows and the limit is applied last, so a filter can never miss
+// matches that sit beyond an arbitrary window of the newest rows
 export async function findTools(ctx: QueryCtx, filters: ToolFilters) {
   const search = filters.search?.trim();
-  let tools: Doc<"tools">[];
-  if (search) {
-    tools = await ctx.db
-      .query("tools")
-      .withSearchIndex("search_name", (q) => {
+  const category = filters.category;
+  const candidates = search
+    ? ctx.db.query("tools").withSearchIndex("search_name", (q) => {
         const base = q.search("name", search).eq("status", "active");
-        return filters.category ? base.eq("category", filters.category) : base;
+        return category ? base.eq("category", category) : base;
       })
-      .take(100);
-  } else {
-    const all = await ctx.db
-      .query("tools")
-      .withIndex("by_status", (q) => q.eq("status", "active"))
-      .order("desc")
-      .take(200);
-    tools = filters.category ? all.filter((t) => t.category === filters.category) : all;
-  }
+    : category
+      ? ctx.db
+          .query("tools")
+          .withIndex("by_status_category", (q) => q.eq("status", "active").eq("category", category))
+          .order("desc")
+      : ctx.db
+          .query("tools")
+          .withIndex("by_status", (q) => q.eq("status", "active"))
+          .order("desc");
   const today = todayUtc();
   const rows = [];
-  for (const tool of tools) {
+  for await (const tool of candidates) {
     const availability = computeAvailability(await approvedLoans(ctx, tool._id), today);
     if (filters.availability === "available" && !availability.availableNow) continue;
     if (filters.availability === "on-loan" && availability.availableNow) continue;
     rows.push({ tool, ...availability });
+    if (rows.length >= MAX_TOOLS) break;
   }
   return rows;
 }

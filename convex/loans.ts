@@ -56,10 +56,7 @@ export const request = mutation({
       .withIndex("by_borrower", (q) => q.eq("borrowerId", viewer._id))
       .collect();
     const duplicate = mine.some(
-      (l) =>
-        l.toolId === tool._id &&
-        (l.status === "requested" || l.status === "approved") &&
-        rangesOverlap(l, range),
+      (l) => l.toolId === tool._id && (l.status === "requested" || l.status === "approved") && rangesOverlap(l, range),
     );
     if (duplicate) throw invalid("you already have a request for those dates");
 
@@ -92,9 +89,7 @@ async function applyTransition(ctx: MutationCtx, loanId: Id<"loans">, t: Transit
   const loan = await ctx.db.get(loanId);
   if (!loan) throw invalid("loan not found");
   const allowed =
-    t.actor === "borrower"
-      ? loan.borrowerId === viewer._id
-      : loan.ownerId === viewer._id || viewer.role === "admin";
+    t.actor === "borrower" ? loan.borrowerId === viewer._id : loan.ownerId === viewer._id || viewer.role === "admin";
   if (!allowed) throw forbidden();
   if (loan.status !== t.from) throw invalid(`a ${loan.status} loan cannot become ${t.to}`);
 
@@ -154,22 +149,27 @@ export const listIncoming = query({
   args: { status: v.optional(loanStatus) },
   handler: async (ctx, args) => {
     const viewer = await requireUser(ctx);
-    const loans = await ctx.db
-      .query("loans")
-      .withIndex("by_owner", (q) => q.eq("ownerId", viewer._id))
+    const status = args.status;
+    // the status filter lives in the index so the limit never hides older matching rows
+    const loans = await (
+      status
+        ? ctx.db.query("loans").withIndex("by_owner_status", (q) => q.eq("ownerId", viewer._id).eq("status", status))
+        : ctx.db.query("loans").withIndex("by_owner", (q) => q.eq("ownerId", viewer._id))
+    )
       .order("desc")
       .take(200);
-    const filtered = args.status ? loans.filter((l) => l.status === args.status) : loans;
     const today = todayUtc();
-    return await Promise.all(filtered.map((l) => toLoanView(ctx, l, today)));
+    return await Promise.all(loans.map((l) => toLoanView(ctx, l, today)));
   },
 });
 
 export const get = query({
-  args: loanIdArg,
+  // a plain string so a malformed url segment yields null instead of an argument validation error
+  args: { loanId: v.string() },
   handler: async (ctx, args) => {
     const viewer = await requireUser(ctx);
-    const loan = await ctx.db.get(args.loanId);
+    const loanId = ctx.db.normalizeId("loans", args.loanId);
+    const loan = loanId ? await ctx.db.get(loanId) : null;
     if (!loan) return null;
     const isParticipant = loan.ownerId === viewer._id || loan.borrowerId === viewer._id;
     if (!isParticipant && viewer.role !== "admin") throw forbidden();
@@ -193,7 +193,15 @@ export const get = query({
     const view = await toLoanView(ctx, loan);
     return {
       ...view,
-      viewerRole: loan.ownerId === viewer._id ? ("owner" as const) : loan.borrowerId === viewer._id ? ("borrower" as const) : ("admin" as const),
+      viewerRole:
+        loan.ownerId === viewer._id
+          ? ("owner" as const)
+          : loan.borrowerId === viewer._id
+            ? ("borrower" as const)
+            : ("admin" as const),
+      // mirrors applyTransition so the ui only offers what the server will accept
+      canManage: loan.ownerId === viewer._id || viewer.role === "admin",
+      canCancel: loan.borrowerId === viewer._id,
       events: timeline,
     };
   },

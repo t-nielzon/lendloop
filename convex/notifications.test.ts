@@ -12,7 +12,11 @@ afterEach(() => {
 
 async function pendingOutbox() {
   const w = await setupWorld();
-  await w.borrower.mutation(api.loans.request, { toolId: w.toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+  await w.borrower.mutation(api.loans.request, {
+    toolId: w.toolId,
+    startDate: daysFromNow(1),
+    endDate: daysFromNow(2),
+  });
   const row = (await w.t.run((ctx) => ctx.db.query("outbox").collect()))[0];
   return { ...w, row };
 }
@@ -57,7 +61,10 @@ describe("deliver", () => {
   it("backs off on failure and goes dead after six attempts", async () => {
     vi.stubEnv("N8N_LOAN_STATUS_WEBHOOK_URL", "http://n8n.test/hook");
     vi.stubEnv("LENDLOOP_OUTBOUND_SECRET", OUT_SECRET);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("boom", { status: 500 })),
+    );
     const { t, row } = await pendingOutbox();
     const expectedDelays = [30, 120, 600, 3600, 21600];
 
@@ -85,7 +92,12 @@ describe("deliver", () => {
   it("records a network error as a failed attempt", async () => {
     vi.stubEnv("N8N_LOAN_STATUS_WEBHOOK_URL", "http://n8n.test/hook");
     vi.stubEnv("LENDLOOP_OUTBOUND_SECRET", OUT_SECRET);
-    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("down"); }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("down");
+      }),
+    );
     const { t, row } = await pendingOutbox();
     await t.action(internal.notifications.deliver, { outboxId: row._id });
     expect(await t.run((ctx) => ctx.db.get(row._id))).toMatchObject({ attempts: 1, lastError: "network error" });
@@ -149,15 +161,22 @@ describe("recovery and idempotence", () => {
 
   it("records a failed notification instead of queueing when the recipient has no email", async () => {
     const { t, borrower, as, owner, toolId } = await setupWorld();
-    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+    const loanId = await borrower.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(1),
+      endDate: daysFromNow(2),
+    });
     await t.run(async (ctx) => {
-      for (const u of await ctx.db.query("users").collect()) if (u.name.startsWith("Ben")) await ctx.db.patch(u._id, { email: "" });
+      for (const u of await ctx.db.query("users").collect())
+        if (u.name.startsWith("Ben")) await ctx.db.patch(u._id, { email: "" });
     });
     const before = (await t.run((ctx) => ctx.db.query("outbox").collect())).length;
     await owner.mutation(api.loans.approve, { loanId });
     expect((await t.run((ctx) => ctx.db.query("outbox").collect())).length).toBe(before);
     const events = await t.run((ctx) => ctx.db.query("loanEvents").collect());
-    expect(events).toContainEqual(expect.objectContaining({ type: "notification_failed", detail: "recipient has no email address" }));
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "notification_failed", detail: "recipient has no email address" }),
+    );
     void as;
   });
 });

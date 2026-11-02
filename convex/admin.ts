@@ -10,8 +10,16 @@ export const outbox = query({
   handler: async (ctx) => {
     await requireAdmin(ctx);
     const rows = [
-      ...(await ctx.db.query("outbox").withIndex("by_status", (q) => q.eq("status", "dead")).order("desc").take(100)),
-      ...(await ctx.db.query("outbox").withIndex("by_status", (q) => q.eq("status", "pending")).order("desc").take(100)),
+      ...(await ctx.db
+        .query("outbox")
+        .withIndex("by_status", (q) => q.eq("status", "dead"))
+        .order("desc")
+        .take(100)),
+      ...(await ctx.db
+        .query("outbox")
+        .withIndex("by_status", (q) => q.eq("status", "pending"))
+        .order("desc")
+        .take(100)),
     ];
     return rows.map((r) => ({
       id: r._id,
@@ -37,7 +45,13 @@ export const retryDelivery = mutation({
     if (row.claimedUntil !== undefined && row.claimedUntil > Date.now()) {
       throw invalid("a delivery attempt is in progress, try again in a minute");
     }
-    await ctx.db.patch(row._id, { status: "pending", attempts: 0, nextAttemptAt: Date.now(), claimedUntil: undefined, lastError: undefined });
+    await ctx.db.patch(row._id, {
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: Date.now(),
+      claimedUntil: undefined,
+      lastError: undefined,
+    });
     await ctx.scheduler.runAfter(0, internal.notifications.deliver, { outboxId: row._id });
     return null;
   },

@@ -35,12 +35,20 @@ describe("loan requests", () => {
 
   it("rejects overlap with approved loans and duplicate own requests but allows other requests", async () => {
     const { owner, borrower, other, toolId } = await setupWorld();
-    const first = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(5) });
+    const first = await borrower.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(1),
+      endDate: daysFromNow(5),
+    });
     await expect(
       borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(4), endDate: daysFromNow(6) }),
     ).rejects.toMatchObject(invalid);
     // a competing request from someone else is fine until one is approved
-    const second = await other.mutation(api.loans.request, { toolId, startDate: daysFromNow(3), endDate: daysFromNow(4) });
+    const second = await other.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(3),
+      endDate: daysFromNow(4),
+    });
     await owner.mutation(api.loans.approve, { loanId: first });
     await expect(owner.mutation(api.loans.approve, { loanId: second })).rejects.toMatchObject(invalid);
     await expect(
@@ -55,7 +63,11 @@ describe("loan requests", () => {
 describe("loan transitions", () => {
   async function requested() {
     const w = await setupWorld();
-    const loanId = await w.borrower.mutation(api.loans.request, { toolId: w.toolId, startDate: daysFromNow(1), endDate: daysFromNow(3) });
+    const loanId = await w.borrower.mutation(api.loans.request, {
+      toolId: w.toolId,
+      startDate: daysFromNow(1),
+      endDate: daysFromNow(3),
+    });
     return { ...w, loanId };
   }
 
@@ -112,12 +124,18 @@ describe("loan transitions", () => {
 describe("loan reads", () => {
   it("restricts loans.get to participants and admins", async () => {
     const { t, root, owner, borrower, other, toolId } = await setupWorld();
-    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+    const loanId = await borrower.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(1),
+      endDate: daysFromNow(2),
+    });
     await expect(t.query(api.loans.get, { loanId })).rejects.toMatchObject({ data: { code: "UNAUTHENTICATED" } });
     await expect(other.query(api.loans.get, { loanId })).rejects.toMatchObject(forbidden);
     expect((await borrower.query(api.loans.get, { loanId }))?.viewerRole).toBe("borrower");
     expect((await owner.query(api.loans.get, { loanId }))?.viewerRole).toBe("owner");
     expect((await root.query(api.loans.get, { loanId }))?.viewerRole).toBe("admin");
+    expect(await root.query(api.loans.get, { loanId })).toMatchObject({ canManage: true, canCancel: false });
+    expect(await borrower.query(api.loans.get, { loanId })).toMatchObject({ canManage: false, canCancel: true });
   });
 
   it("splits my requests and incoming and gates the admin list", async () => {
@@ -127,6 +145,7 @@ describe("loan reads", () => {
     expect(await owner.query(api.loans.listMyRequests, {})).toHaveLength(0);
     expect(await owner.query(api.loans.listIncoming, {})).toHaveLength(1);
     expect(await owner.query(api.loans.listIncoming, { status: "approved" })).toHaveLength(0);
+    expect(await owner.query(api.loans.listIncoming, { status: "requested" })).toHaveLength(1);
     await expect(owner.query(api.loans.listAll, {})).rejects.toMatchObject(forbidden);
     expect(await root.query(api.loans.listAll, { status: "requested" })).toHaveLength(1);
     expect(await root.query(api.loans.listAll, { overdueOnly: true })).toHaveLength(0);
@@ -134,7 +153,11 @@ describe("loan reads", () => {
 
   it("flags approved loans past their end date as overdue", async () => {
     const { t, owner, root, borrower, toolId } = await setupWorld();
-    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(0), endDate: daysFromNow(1) });
+    const loanId = await borrower.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(0),
+      endDate: daysFromNow(1),
+    });
     await owner.mutation(api.loans.approve, { loanId });
     await t.run((ctx) => ctx.db.patch(loanId, { startDate: daysFromNow(-5), endDate: daysFromNow(-2) }));
     const overdue = await root.query(api.loans.listAll, { overdueOnly: true });
@@ -165,7 +188,11 @@ describe("admin", () => {
 describe("approval guards", () => {
   it("rejects approving a second request that overlaps an approved one", async () => {
     const { owner, borrower, other, toolId } = await setupWorld();
-    const a = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(4) });
+    const a = await borrower.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(1),
+      endDate: daysFromNow(4),
+    });
     const b = await other.mutation(api.loans.request, { toolId, startDate: daysFromNow(3), endDate: daysFromNow(6) });
     await owner.mutation(api.loans.approve, { loanId: a });
     await expect(owner.mutation(api.loans.approve, { loanId: b })).rejects.toMatchObject(invalid);
@@ -173,14 +200,22 @@ describe("approval guards", () => {
 
   it("rejects approval for a start date in the past", async () => {
     const { t, owner, borrower, toolId } = await setupWorld();
-    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(0), endDate: daysFromNow(2) });
+    const loanId = await borrower.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(0),
+      endDate: daysFromNow(2),
+    });
     await t.run((ctx) => ctx.db.patch(loanId, { startDate: daysFromNow(-1) }));
     await expect(owner.mutation(api.loans.approve, { loanId })).rejects.toMatchObject(invalid);
   });
 
   it("archiving a tool declines its pending requests with events and notifications", async () => {
     const { t, owner, borrower, toolId } = await setupWorld();
-    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+    const loanId = await borrower.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(1),
+      endDate: daysFromNow(2),
+    });
     await owner.mutation(api.tools.archive, { toolId });
     const loan = await t.run((ctx) => ctx.db.get(loanId));
     expect(loan?.status).toBe("declined");
@@ -191,14 +226,22 @@ describe("approval guards", () => {
 
   it("rejects approving a request on an archived tool", async () => {
     const { t, owner, borrower, toolId } = await setupWorld();
-    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+    const loanId = await borrower.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(1),
+      endDate: daysFromNow(2),
+    });
     await t.run((ctx) => ctx.db.patch(toolId, { status: "archived" }));
     await expect(owner.mutation(api.loans.approve, { loanId })).rejects.toMatchObject(invalid);
   });
 
   it("shows first names only in the loan view and timeline", async () => {
     const { owner, borrower, toolId } = await setupWorld();
-    const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
+    const loanId = await borrower.mutation(api.loans.request, {
+      toolId,
+      startDate: daysFromNow(1),
+      endDate: daysFromNow(2),
+    });
     const loan = await owner.query(api.loans.get, { loanId });
     expect(loan?.borrowerName).toBe("Ben");
     expect(loan?.ownerName).toBe("Olive");
