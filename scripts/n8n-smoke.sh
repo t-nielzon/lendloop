@@ -51,10 +51,12 @@ expect_status() { # label expected actual
 
 compose up -d mailpit n8n-import n8n
 
-# one bounded wait for n8n to serve requests (import runs first, then the main process starts)
+# one bounded wait for the webhook to be live (import runs first, then the main process starts)
 ready=""
 for _ in $(seq 1 60); do
-  if curl -fsS --max-time 3 "http://127.0.0.1:${n8n_port}/healthz" >/dev/null 2>&1; then ready=1; break; fi
+  # healthz answers before published webhooks are registered, so wait until the route stops returning 404
+  code="$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-raw '{}' "$url" || true)"
+  if [ "$code" = "401" ]; then ready=1; break; fi
   sleep 3
 done
 [ -n "$ready" ] || { echo "n8n did not become healthy in time" >&2; exit 1; }
