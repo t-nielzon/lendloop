@@ -112,7 +112,7 @@ export const get = query({
         loanId: isOwnerOrAdmin ? l._id : undefined,
         startDate: l.startDate,
         endDate: l.endDate,
-        borrowerName: borrower?.name,
+        borrowerName: borrower ? firstName(borrower.name) : undefined,
       });
     }
     const a = computeAvailability(loans, today);

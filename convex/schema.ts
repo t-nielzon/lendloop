@@ -116,6 +116,8 @@ export default defineSchema({
     status: outboxStatus,
     attempts: v.number(),
     nextAttemptAt: v.number(),
+    // lease expiry of the in-flight delivery attempt, so a manual retry cannot double-send
+    claimedUntil: v.optional(v.number()),
     lastError: v.optional(v.string()),
     deliveredAt: v.optional(v.number()),
     createdAt: v.number(),

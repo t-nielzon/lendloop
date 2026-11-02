@@ -25,7 +25,7 @@ export const claim = internalMutation({
     const row = await ctx.db.get(args.outboxId);
     const now = Date.now();
     if (!row || row.status !== "pending" || row.nextAttemptAt > now + CLAIM_SLACK_MS) return false;
-    await ctx.db.patch(row._id, { nextAttemptAt: now + CLAIM_LEASE_MS });
+    await ctx.db.patch(row._id, { nextAttemptAt: now + CLAIM_LEASE_MS, claimedUntil: now + CLAIM_LEASE_MS });
     return true;
   },
 });

@@ -135,6 +135,18 @@ describe("recovery and idempotence", () => {
     expect(await t.run((ctx) => ctx.db.get(row._id))).toMatchObject({ status: "pending", attempts: 0 });
   });
 
+  it("rejects a retry while a delivery claim is active, then allows it once the lease lapses", async () => {
+    const { t, root, row } = await pendingOutbox();
+    await t.run((ctx) => ctx.db.patch(row._id, { nextAttemptAt: Date.now() - 1 }));
+    expect(await t.mutation(internal.notifications.claim, { outboxId: row._id })).toBe(true);
+    await expect(root.mutation(api.admin.retryDelivery, { outboxId: row._id })).rejects.toMatchObject({
+      data: { code: "INVALID" },
+    });
+    vi.advanceTimersByTime(61_000);
+    await root.mutation(api.admin.retryDelivery, { outboxId: row._id });
+    expect(await t.run((ctx) => ctx.db.get(row._id))).toMatchObject({ status: "pending", attempts: 0 });
+  });
+
   it("records a failed notification instead of queueing when the recipient has no email", async () => {
     const { t, borrower, as, owner, toolId } = await setupWorld();
     const loanId = await borrower.mutation(api.loans.request, { toolId, startDate: daysFromNow(1), endDate: daysFromNow(2) });
