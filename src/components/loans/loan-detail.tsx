@@ -10,6 +10,7 @@ import { QueryBoundary } from "@/components/common/query-boundary";
 import { useViewer } from "@/components/common/use-viewer";
 import { EmptyState, ListSkeleton, NotFoundState } from "@/components/common/states";
 import { formatDateTime, formatRange } from "@/lib/dates";
+import { AutomationLine } from "./automation-line";
 import { LoanActions } from "./loan-actions";
 import { LoanTimeline } from "./loan-timeline";
 
@@ -58,6 +59,14 @@ function Loaded({ loanId }: { loanId: Id<"loans"> }) {
               <>
                 <dt className="text-muted-foreground">Note</dt>
                 <dd className="whitespace-pre-line">{loan.note}</dd>
+              </>
+            ) : null}
+            {loan.lastAutomation ? (
+              <>
+                <dt className="text-muted-foreground">Last automation</dt>
+                <dd>
+                  <AutomationLine automation={loan.lastAutomation} />
+                </dd>
               </>
             ) : null}
             {loan.reminderCount > 0 ? (

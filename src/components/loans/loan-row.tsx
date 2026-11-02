@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { OverdueBadge, StatusBadge, type LoanStatus } from "@/components/common/status-badge";
+import { AutomationLine } from "./automation-line";
 import { formatRange } from "@/lib/dates";
 
 export type LoanRowData = {
@@ -11,6 +12,7 @@ export type LoanRowData = {
   endDate: string;
   status: string;
   isOverdue: boolean;
+  lastAutomation?: { type: string; at: number } | null;
 };
 
 export function LoanRow({
@@ -36,6 +38,7 @@ export function LoanRow({
             <StatusBadge status={loan.status as LoanStatus} />
             {loan.isOverdue ? <OverdueBadge /> : null}
           </div>
+          {loan.lastAutomation ? <AutomationLine automation={loan.lastAutomation} /> : null}
         </div>
         {actions}
       </CardContent>

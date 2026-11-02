@@ -9,7 +9,7 @@ import { EmptyState, ListSkeleton } from "@/components/common/states";
 import { LoanActions } from "@/components/loans/loan-actions";
 import { LoanRow } from "@/components/loans/loan-row";
 
-const STATUSES = ["requested", "approved", "declined", "cancelled", "returned"] as const;
+const STATUSES = ["requested", "approved", "declined", "cancelled", "returned", "expired"] as const;
 type Status = (typeof STATUSES)[number];
 
 export function IncomingRequests() {

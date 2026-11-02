@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-export type LoanStatus = "requested" | "approved" | "declined" | "cancelled" | "returned";
+export type LoanStatus = "requested" | "approved" | "declined" | "cancelled" | "returned" | "expired";
 
 const STYLES: Record<LoanStatus, string> = {
   requested: "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200",
@@ -9,6 +9,7 @@ const STYLES: Record<LoanStatus, string> = {
   declined: "bg-rose-100 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200",
   cancelled: "bg-muted text-muted-foreground",
   returned: "bg-sky-100 text-sky-900 dark:bg-sky-900/30 dark:text-sky-200",
+  expired: "bg-muted text-muted-foreground",
 };
 
 const LABELS: Record<LoanStatus, string> = {
@@ -17,6 +18,7 @@ const LABELS: Record<LoanStatus, string> = {
   declined: "Declined",
   cancelled: "Cancelled",
   returned: "Returned",
+  expired: "Expired",
 };
 
 export function StatusBadge({ status, className }: { status: LoanStatus; className?: string }) {

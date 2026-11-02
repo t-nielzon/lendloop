@@ -5,6 +5,7 @@ import { QueryBoundary } from "@/components/common/query-boundary";
 import { useViewer } from "@/components/common/use-viewer";
 import { EmptyState, ForbiddenState, ListSkeleton } from "@/components/common/states";
 import { ErrorsPanel } from "./errors-panel";
+import { HealthAlertsPanel } from "./health-alerts-panel";
 import { LoansPanel } from "./loans-panel";
 import { OutboxPanel } from "./outbox-panel";
 import { UsersPanel } from "./users-panel";
@@ -25,6 +26,7 @@ export function AdminConsole() {
           <TabsTrigger value="loans">Loans</TabsTrigger>
           <TabsTrigger value="outbox">Delivery outbox</TabsTrigger>
           <TabsTrigger value="errors">Automation errors</TabsTrigger>
+          <TabsTrigger value="health">Health alerts</TabsTrigger>
         </TabsList>
         <TabsContent value="users">
           <UsersPanel />
@@ -37,6 +39,9 @@ export function AdminConsole() {
         </TabsContent>
         <TabsContent value="errors">
           <ErrorsPanel />
+        </TabsContent>
+        <TabsContent value="health">
+          <HealthAlertsPanel />
         </TabsContent>
       </Tabs>
     </QueryBoundary>
