@@ -88,4 +88,20 @@ describe("demo seed", () => {
       }
     }
   });
+
+  it("dev helpers age a requested loan and manage a removable dead outbox row", async () => {
+    const { t } = await setupWorld();
+    await t.mutation(internal.seed.demo, {});
+    const loan = await t.run(async (ctx) => (await ctx.db.query("loans").collect()).find((l) => l.status === "requested")!);
+    await t.mutation(internal.seed.ageRequest, { loanId: loan._id, hoursOld: 72, startDate: "2026-01-01" });
+    const aged = await t.run((ctx) => ctx.db.get(loan._id));
+    expect(aged?.startDate).toBe("2026-01-01");
+    expect(Math.abs(Date.now() - aged!.createdAt - 72 * 3_600_000)).toBeLessThan(1000);
+    await expect(t.mutation(internal.seed.ageRequest, { loanId: loan._id, hoursOld: 1, startDate: "soon" })).rejects.toThrow();
+
+    await t.mutation(internal.seed.createDevIncident, { loanId: loan._id });
+    expect((await t.query(internal.automation.deliveryHealth, {})).dead).toBe(1);
+    expect(await t.mutation(internal.seed.clearDevIncidents, {})).toEqual({ removed: 1 });
+    expect((await t.query(internal.automation.deliveryHealth, {})).dead).toBe(0);
+  });
 });

@@ -341,3 +341,49 @@ export const backdateLoan = internalMutation({
     return null;
   },
 });
+
+// makes a requested loan look old so the follow-up and expiry flows can be exercised without waiting
+export const ageRequest = internalMutation({
+  args: { loanId: v.id("loans"), hoursOld: v.number(), startDate: v.optional(v.string()), endDate: v.optional(v.string()) },
+  handler: async (ctx, { loanId, hoursOld, startDate, endDate }) => {
+    const loan = await ctx.db.get(loanId);
+    if (!loan) throw invalid("loan not found");
+    if (loan.status !== "requested") throw invalid("only requested loans can be aged");
+    for (const d of [startDate, endDate]) {
+      if (d !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw invalid("dates must be YYYY-MM-DD");
+    }
+    const patch: Partial<Doc<"loans">> = { createdAt: Date.now() - hoursOld * 3_600_000 };
+    if (startDate) patch.startDate = startDate;
+    if (endDate) patch.endDate = endDate;
+    await ctx.db.patch(loanId, patch);
+    return null;
+  },
+});
+
+// inserts a dead outbox row marked as a dev incident so the health monitor has something to report
+export const createDevIncident = internalMutation({
+  args: { loanId: v.id("loans") },
+  handler: async (ctx, { loanId }) => {
+    const now = Date.now();
+    return await ctx.db.insert("outbox", {
+      eventId: `dev-incident-${now}`,
+      loanId,
+      payload: {},
+      status: "dead",
+      attempts: 5,
+      nextAttemptAt: now,
+      lastError: "smtp connection refused (simulated outage)",
+      createdAt: now,
+    });
+  },
+});
+
+export const clearDevIncidents = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("outbox").withIndex("by_status", (q) => q.eq("status", "dead")).collect();
+    const mine = rows.filter((r) => r.eventId.startsWith("dev-incident-"));
+    for (const r of mine) await ctx.db.delete(r._id);
+    return { removed: mine.length };
+  },
+});
